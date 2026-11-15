@@ -1,6 +1,6 @@
 {
   "name": "handoff",
-  "version": "1.0.1",
+  "version": "1.0.0",
   "description": "The hand-off site rules, loaded per step: the site, review pages, phased plans, sign-off checklists and hand-offs written for other people. Includes the unread-inbox prompt hook.",
   "author": { "name": "The ai-warren Authors" },
   "license": "Apache-2.0"

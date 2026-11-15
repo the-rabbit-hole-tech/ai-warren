@@ -1,6 +1,6 @@
 {
   "name": "warren",
-  "version": "1.8.0",
+  "version": "1.0.0",
   "description": "The always-on warren text and the hard stops: the git identity guard, the scrub and secrets gate, forbidden text, Conventional Commits and the Marketplace release guard.",
   "author": { "name": "The ai-warren Authors" },
   "license": "Apache-2.0"

@@ -1,6 +1,6 @@
 {
   "name": "github",
-  "version": "1.4.0",
+  "version": "1.0.0",
   "description": "The GitHub flow as skills: issues, branches, PRs, CI, approvals and merging, cleanup, repo metadata, profiles, releases and the Cut trigger.",
   "author": { "name": "The ai-warren Authors" },
   "license": "Apache-2.0"
