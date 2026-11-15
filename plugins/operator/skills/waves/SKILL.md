@@ -19,3 +19,4 @@ description: Use when planning or running a wave of parallel lanes, preparing a 
 - Blockers that only the owner can clear (a registry or ruleset setting, an admin merge, an account step) go to the owner first and loudest, with the exact step.
 - Bring finished PRs to the owner for approval, batches of four, before starting regular issues.
 - Fixes before features: finish the open fix issues first, because open fixes limit features.
+- Aim waves from the counts: track the open issues per org and repo (`issue-counts.py` in the host's shared bin, run at every review window and before each wave, written to a dated file and shown on the hand-off site). The repos with the most open issues get the next batch of lanes first, in batches; each batch has a target number of issues to close, and progress is reported as the count going down. Do not file new issues to look busy: a finding small enough for the PR in hand is fixed there.
