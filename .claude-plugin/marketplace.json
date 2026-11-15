@@ -1,7 +1,7 @@
 {
   "name": "ai-warren",
   "owner": { "name": "The ai-warren Authors" },
-  "metadata": { "version": "1.0.0", "description": "the rabbit hole's agent factory: plugins and skills loaded per step" },
+  "metadata": { "version": "1.0.1", "description": "the rabbit hole's agent factory: plugins and skills loaded per step" },
   "plugins": [
     {
       "name": "warren",
