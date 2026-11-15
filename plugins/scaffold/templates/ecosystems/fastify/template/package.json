@@ -1,0 +1,84 @@
+{
+  "name": "__REPO_NAME__",
+  "version": "0.0.0",
+  "description": "__DESCRIPTION__",
+  "author": "__AUTHOR__",
+  "license": "__LICENSE__",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "config": {
+    "packMaxUnpackedBytes": 250000,
+    "packMaxGrowthPercent": 25
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/__OWNER__/__REPO_NAME__.git"
+  },
+  "homepage": "https://github.com/__OWNER__/__REPO_NAME__#readme",
+  "bugs": {
+    "url": "https://github.com/__OWNER__/__REPO_NAME__/issues"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "check:pack": "node scripts/checkPack.mjs",
+    "check:pack:growth": "node scripts/checkPackGrowth.mjs",
+    "check:install": "node scripts/checkInstall.mjs",
+    "dev": "tsdown --watch",
+    "clean": "rm -rf dist docs coverage",
+    "app": "fastify start -i tsx -l info src/app.ts",
+    "app:dev": "fastify start -i tsx -w -l info src/app.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "docs": "typedoc"
+  },
+  "peerDependencies": {
+    "fastify": "^5.8.0"
+  },
+  "dependencies": {
+    "fastify-plugin": "^5.1.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.0",
+    "@fastify/autoload": "^6.0.0",
+    "@types/node": "^22.10.0",
+    "@vitest/coverage-v8": "^4.1.0",
+    "eslint": "^10.0.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-prettier": "^5.2.1",
+    "fastify": "^5.8.0",
+    "fastify-cli": "^8.0.0",
+    "prettier": "^3.8.0",
+    "tsdown": "^0.22.0",
+    "tsx": "^4.20.0",
+    "typedoc": "^0.28.0",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.60.0",
+    "vitest": "^4.1.0"
+  }
+}

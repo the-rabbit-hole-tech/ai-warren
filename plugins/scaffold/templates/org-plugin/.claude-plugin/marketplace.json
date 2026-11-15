@@ -1,0 +1,12 @@
+{
+  "name": "__OWNER_LOWER__",
+  "owner": { "name": "__AUTHOR__" },
+  "metadata": { "description": "The warren rules for __OWNER__: skills that tighten the ai-warren base" },
+  "plugins": [
+    {
+      "name": "warren-org-__OWNER_LOWER__",
+      "source": "./plugins/warren-org-__OWNER_LOWER__",
+      "description": "The __OWNER__ rules: what this owner adds on top of the ai-warren base."
+    }
+  ]
+}

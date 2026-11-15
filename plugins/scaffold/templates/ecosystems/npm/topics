@@ -1,0 +1,5 @@
+# Ecosystem base GitHub topics for npm repos, applied at scaffold time.
+# Domain topics (e.g. mqtt, amqp, billing) are per-repo and added by the owner.
+npm
+typescript
+nodejs

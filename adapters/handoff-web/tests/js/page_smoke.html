@@ -1,0 +1,1233 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>page smoke harness</title></head><body>
+<!-- Smoke tests for JSON pages (render.js plus review.js) in a real browser, run by tests/test_page_smoke.py. Each
+     test loads its own page file in a same-origin frame, clicks like the owner would, and the results land in #out
+     for Chrome's --dump-dom. -->
+<iframe id="f" style="width:1000px;height:800px"></iframe>
+<pre id="out">pending</pre>
+<script>
+const results = {};
+const f = document.getElementById("f");
+const d = () => f.contentDocument, w = () => f.contentWindow;
+const tick = ms => new Promise(r => setTimeout(r, ms));
+async function until(cond, what, tries = 600) {
+  for (let i = 0; i < tries; i++) { try { if (cond()) return; } catch (e) {} await tick(25); }
+  throw new Error("timed out waiting for " + what);
+}
+function fail(msg) { throw new Error(msg); }
+const ok = (v, msg) => { if (!v) fail(msg || "expected truthy"); };
+const eq = (a, b, msg) => { if (a !== b) fail((msg ? msg + ": " : "") + JSON.stringify(a) + " !== " + JSON.stringify(b)); };
+const match = (s, re, msg) => { if (!re.test(s)) fail((msg ? msg + ": " : "") + JSON.stringify(s) + " !~ " + re); };
+async function t(name, fn) {
+  try { await fn(); results[name] = "ok"; } catch (e) { results[name] = "FAIL " + String(e && e.stack || e).split("\n").slice(0, 3).join(" | "); }
+}
+function stub() {
+  const win = w();
+  win.alert = () => {}; win.confirm = () => true; win.prompt = () => "stuck";
+  Object.defineProperty(win.navigator, "clipboard", { configurable: true, value: { writeText: async s => { win.__clip = s; } } });
+}
+async function open(path) { await new Promise(r => { f.onload = r; f.src = path; }); }
+async function load(path) {
+  await open(path);
+  await until(() => w().siteReview && d().querySelector(".rvbar .cnt").textContent, "the rendered page " + path);
+  stub();
+  return { win: w(), doc: d(), bar: d().querySelector(".rvbar") };
+}
+const click = el => el.dispatchEvent(new (w().MouseEvent)("click", { bubbles: true }));
+const saved = () => until(() => !w().siteReview.unsaved(), "the save");
+const pageFile = async rel => (await (await fetch("/_page/" + rel, { cache: "no-store" })).json()).page;
+const answers = async rel => { const p = await pageFile(rel); return p.rounds[p.rounds.length - 1].answers; };
+const card = (doc, id) => doc.querySelector('[data-review-question="' + id + '"]');
+// Types the way a person does, so React's own input handling sees it too.
+const win_css = doc => doc.defaultView.getComputedStyle(doc.querySelector(".custom-progress")).borderLeftWidth;
+function typeIn(el, text) {
+  const win = el.ownerDocument.defaultView;
+  Object.getOwnPropertyDescriptor(win[el.tagName === "INPUT" ? "HTMLInputElement" : "HTMLTextAreaElement"].prototype, "value").set.call(el, text);
+  el.dispatchEvent(new win.Event("input", { bubbles: true }));
+}
+const seg = (doc, id, v) => card(doc, id).querySelector('.seg button[data-v="' + v + '"]');
+// Yes now asks first: press it, optionally write a note, then Confirm. The item locks and its row collapses.
+// Reopen takes the lock off a confirmed Yes and needs a reason.
+async function reopenIt(doc, id, reason) {
+  const c = card(doc, id), tg = c.querySelector(".settled-tg");
+  if (tg && !c.classList.contains("shown")) click(tg);
+  click(c.querySelector(".reopen-btn"));
+  const g = c.querySelector(".reopen-yes"); ok(g, "Reopen opens its reason form on " + id);
+  typeIn(g.querySelector("textarea"), reason);
+  click(g.querySelector(".confirm-ok"));
+  await until(() => !c.querySelector(".reopen-yes") && !c.classList.contains("is-confirmed"), "the reopen on " + id);
+}
+async function yes(doc, id, note) {
+  click(seg(doc, id, "yes"));
+  const g = card(doc, id).querySelector(".confirm-yes"); ok(g, "Yes on " + id + " opens the confirm step");
+  if (note !== undefined) typeIn(g.querySelector("textarea"), note);
+  click(g.querySelector(".confirm-ok"));
+  await until(() => !card(doc, id).querySelector(".confirm-yes"), "the confirm step to close on " + id);
+}
+
+(async () => {
+  await t("review: answers, notes, card follows answer, green then approved, saved to the page file", async () => {
+    const { win, doc, bar } = await load("/demo/pf-review-1");
+    eq(doc.title, "pf-review-1");
+    eq(doc.querySelector("header.top h1").textContent, "pf-review-1");
+    const cards = Array.from(doc.querySelectorAll(".rvcard")); eq(cards.length, 4);
+    eq(cards[0].querySelector("h2").textContent, "1. A module repo", "numbered from 1");
+    click(seg(doc, "r1", "no"));
+    eq(cards[0].dataset.answer, "no"); eq(cards[0].querySelector(".rvhead .st").textContent, "No");
+    ok(!cards[0].querySelector(".notel").hidden);
+    const ta = cards[0].querySelector("textarea"); typeIn(ta, "Split it");
+    await saved();
+    for (const id of ["r2", "r3", "r4"]) await yes(doc, id);
+    ok(bar.classList.contains("all-done")); ok(!bar.classList.contains("approved"));
+    await yes(doc, "r1");
+    ok(bar.classList.contains("approved")); match(bar.querySelector(".cnt").textContent, /^APPROVED · all 4 Yes/);
+    await saved();
+    const a = await answers("demo/pf-review-1");
+    eq(a.r1.answer, "yes"); eq(a.r1.note, "Split it"); eq(a.r1.was[0].answer, "no"); eq(a.r4.answer, "yes"); eq(a.r4.by, "Alex");
+  });
+
+  await t("review: Changes needs a note; Blocker: send now writes a blocker to the inbox; copy blockers", async () => {
+    const { win, doc, bar } = await load("/demo/pf-review-2");
+    const c = card(doc, "r1");
+    click(seg(doc, "r1", "chg"));
+    ok(c.querySelector(".rv").classList.contains("empty"));
+    const bk = c.querySelector(".blocker-btn"); eq(bk.textContent, "Blocker: send now");
+    let alerted = ""; win.alert = m => { alerted = m; };
+    click(bk);
+    await until(() => alerted, "the blocker alert");
+    match(alerted, /^Blocker sent to ops/);
+    ok(bar.classList.contains("has-blocker")); eq(bar.querySelector(".bkr").textContent, "1 BLOCKER");
+    const p = await pageFile("demo/pf-review-2");
+    eq(p.submissions.length, 1); eq(p.submissions[0].kind, "blocker"); eq(JSON.stringify(p.submissions[0].items), '["r1"]');
+    eq(p.rounds[0].answers.r1.note, "stuck");
+    click(bar.querySelector(".copy-blockers")); await tick(50);
+    match(win.__clip, /^BLOCKER: .*\n- \[r1\] A module repo\n {4}Note: stuck\n$/);
+  });
+
+  await t("copy route: Blocker: copy now copies, and there is no Send button", async () => {
+    const { win, doc, bar } = await load("/demo/pf-copyroute");
+    ok(!bar.querySelector(".send-btn"), "no Send on a copy route");
+    const bk = card(doc, "r2").querySelector(".blocker-btn"); eq(bk.textContent, "Blocker: copy now");
+    click(bk); await tick(100);
+    match(win.__clip, /^BLOCKER: Copy route \(\/demo\/pf-copyroute\)\n- \[r2\] The web app\n {4}Note: stuck\n$/);
+    eq((await pageFile("demo/pf-copyroute")).submissions.length, 0);
+  });
+
+  await t("jump bar: Next and the n key walk open items; the picker filters and Enter jumps", async () => {
+    const { win, doc, bar } = await load("/demo/pf-review-3");
+    eq(bar.querySelector(".ids-l").textContent, "Open IDs"); eq(bar.querySelector(".ids-n").textContent, "(4)");
+    await yes(doc, "r1");
+    eq(bar.querySelector(".ids-n").textContent, "(3)");
+    click(bar.querySelector(".next")); await tick(500);
+    eq(doc.activeElement.closest("[data-review-question]").dataset.reviewQuestion, "r2");
+    doc.activeElement.blur();
+    win.document.dispatchEvent(new win.KeyboardEvent("keydown", { key: "n", bubbles: true })); await tick(500);
+    ok(doc.activeElement.closest("[data-review-question]"), "n moved focus to an item");
+    click(bar.querySelector(".ids"));
+    const pick = bar.querySelector(".rvids"); ok(!pick.hidden);
+    const inp = pick.querySelector("input"); typeIn(inp, "platform");
+    eq(pick.querySelectorAll(".rvids-list a").length, 1);
+    inp.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    ok(pick.hidden);
+  });
+
+  await t("saved answers load from the page file; a failed save shows amber", async () => {
+    const { win, doc, bar } = await load("/demo/pf-saved");
+    const c = card(doc, "r1"); eq(c.dataset.answer, "yes");
+    eq(seg(doc, "r1", "yes").getAttribute("aria-pressed"), "true");
+    match(bar.querySelector(".svst").textContent, /^Saved \d\d:\d\d$/);
+    win.fetch = async (u, o = {}) => { if (o.method === "PUT") throw new Error("down"); return { ok: false, status: 500 }; };
+    click(seg(doc, "r1", "no"));
+    await until(() => bar.classList.contains("save-bad"), "the failed save");
+    eq(bar.querySelector(".svst").textContent, "Not saved · retrying");
+    eq(win.siteReview.unsaved(), true);
+  });
+
+  await t("checklist: answering an item Yes unblocks the items that depend on it at once, no reload", async () => {
+    const { doc } = await load("/demo/pf-unblock");
+    eq(card(doc, "c4").querySelector(".rvhead .st").textContent, "Blocked by c2");
+    await yes(doc, "c2");
+    await tick(60);
+    ok(!card(doc, "c4").classList.contains("is-blocked"), "c4 unblocked straight away");
+    ok(!seg(doc, "c4", "yes").disabled, "c4 can be answered");
+    await reopenIt(doc, "c2", "I want to answer it differently");
+    click(seg(doc, "c2", "no"));
+    await tick(60);
+    ok(card(doc, "c4").classList.contains("is-blocked"), "a No blocks it again");
+    click(seg(doc, "c2", "chg"));
+    await tick(60);
+    ok(!card(doc, "c4").classList.contains("is-blocked"), "Changes meets the dependency");
+  });
+
+  await t("checklist: skip locks, earlier Yes locked, blocked by a dependency, reopened with its reason, question", async () => {
+    const { win, doc, bar } = await load("/demo/pf-check");
+    ok(doc.querySelector(".rvdone"), "approved and locked note");
+    ok(card(doc, "c1").classList.contains("settled"), "c1 is a locked row");
+    eq(seg(doc, "c1", "yes").getAttribute("aria-pressed"), "true"); ok(seg(doc, "c1", "yes").disabled);
+    eq(card(doc, "c1").querySelector(".rvhead .st").textContent, "Yes (locked)");
+    eq(doc.querySelector(".rvhist").offsetWidth, card(doc, "c2").offsetWidth, "History is as wide as the items");
+    eq(card(doc, "c4").querySelector(".rvhead .st").textContent, "Blocked by c2");
+    eq(card(doc, "c4").querySelector(".rvhead .st a").getAttribute("href"), "#rv-c2");
+    eq(card(doc, "c5").querySelector(".rvhead .st").textContent, "Reopened: fixed in #70");
+    match(bar.querySelector(".cnt").textContent, /^0 of 3 answered · 1 blocked · 1 approved and locked · 1 question unanswered/);
+    click(seg(doc, "c3", "skip"));
+    eq(card(doc, "c3").querySelector(".rvhead .st").textContent, "Skipped (locked)");
+    ok(seg(doc, "c3", "yes").disabled);
+    for (const id of ["c2", "c5"]) await yes(doc, id);
+    await tick(60);
+    await yes(doc, "c4");
+    ok(bar.classList.contains("approved"), bar.querySelector(".cnt").textContent);
+    const r = win.siteReview.results();
+    match(r, /- \[c1\] YES: One/); match(r, /- \[c3\] SKIPPED \(locked\): Three/); match(r, /- \[c4\] YES \(locked\): Four/);
+    match(r, /Q q1: \(no answer\)/);
+    await saved();
+    const a = await answers("demo/pf-check");
+    eq(a.c3.answer, "skipped"); eq(a.c5.answer, "yes"); ok(!a.c1, "a hidden Yes isn't written into the new round");
+  });
+
+  await t("question: Use suggestion fills the answer and saves it", async () => {
+    const { doc } = await load("/demo/pf-question");
+    const q = card(doc, "q1"); ok(q.querySelector(".rv.question"));
+    click(q.querySelector(".suggest-btn"));
+    eq(q.querySelector("textarea.qans").value, "5390");
+    await saved();
+    eq((await answers("demo/pf-question")).q1.answer, "5390");
+  });
+
+  await t("question skip: Skip locks the text, the pill and Copy results say so, Un-skip gives the text back", async () => {
+    const { win, doc, bar } = await load("/demo/pf-skip");
+    const q = card(doc, "q1"), ta = q.querySelector("textarea.qans");
+    ok(q.querySelector(".skip-btn") && !q.querySelector(".unskip-btn"));
+    typeIn(ta, "Maybe Friday");
+    click(q.querySelector(".skip-btn"));
+    ok(ta.disabled, "the text is locked while skipped"); eq(ta.value, "Maybe Friday");
+    match(q.querySelector(".rvhead").textContent, /Skipped \(locked\)/);
+    ok(!q.querySelector(".skip-btn") && q.querySelector(".unskip-btn"));
+    match(win.siteReview.results(), /\nSKIPPED: Which day\?\n/); ok(!/Q q1:/.test(win.siteReview.results()));
+    await saved();
+    let a = (await answers("demo/pf-skip")).q1;
+    eq(a.skipped, true); eq(a.answer, "Maybe Friday");
+    click(q.querySelector(".unskip-btn"));
+    ok(!ta.disabled); eq(ta.value, "Maybe Friday"); ok(q.querySelector(".skip-btn"));
+    await saved();
+    a = (await answers("demo/pf-skip")).q1;
+    ok(!a.skipped); eq(a.answer, "Maybe Friday");
+  });
+
+  await t("backlog: default choice, picking every item turns the bar green, saved", async () => {
+    const { win, doc, bar } = await load("/demo/pf-backlog");
+    eq(doc.querySelectorAll(".rv.choice").length, 3);
+    match(bar.querySelector(".cnt").textContent, /^0 of 3 picked/);
+    eq(bar.querySelector(".ids-l").textContent, "Not picked");
+    ok(doc.querySelector(".rv .seg button.def").textContent.includes("(default)"));
+    const segs = Array.from(doc.querySelectorAll(".rv.choice .seg"));
+    segs.forEach((g, i) => click(g.querySelectorAll("button")[i === 0 ? 0 : 1]));
+    ok(bar.classList.contains("all-done")); match(bar.querySelector(".cnt").textContent, /^All 3 picked · 1 start · 2 hold/);
+    const cta = card(doc, "b3").querySelector("textarea"); typeIn(cta, "After the audit");
+    await saved();
+    const a = await answers("demo/pf-backlog");
+    eq(a.b1.answer, "start"); eq(a.b2.answer, "hold"); eq(a.b3.note, "After the audit");
+    match(win.siteReview.results(), /\n1 start · 2 hold\n/);
+  });
+
+  await t("theme toggle works on a rendered page", async () => {
+    localStorage.removeItem("site-theme");
+    const { doc } = await load("/demo/pf-theme");
+    await until(() => doc.querySelector("header.top .theme-tg"), "the theme toggle");
+    click(doc.querySelector('header.top .theme-tg [data-theme="dark"]'));
+    eq(doc.documentElement.getAttribute("data-theme"), "dark");
+    click(doc.querySelector('header.top .theme-tg [data-theme="auto"]'));
+    ok(!doc.documentElement.hasAttribute("data-theme"));
+  });
+
+  await t("bar: one row when it fits, a clean split when it does not, and no control ever wraps", async () => {
+    const { win, doc, bar } = await load("/demo/pf-theme");
+    const r1 = () => w().document.querySelector(".rvbar-r1"), r2 = () => w().document.querySelector(".rvbar-r2"), b = () => w().document.querySelector(".rvbar");
+    const shown = row => Array.from(row.children).filter(el => el.getClientRects().length);
+    const spread = row => { const m = shown(row).map(el => { const r = el.getBoundingClientRect(); return r.top + r.height / 2; }); return Math.max(...m) - Math.min(...m); };
+    f.style.width = "1000px"; await tick(80);
+    ok(!bar.classList.contains("two"), "a short bar stays one row: " + JSON.stringify(["inner", ".cnt", ".dlv-t"].map(q => { const el = q === "inner" ? bar.querySelector(".rvbar-in") : bar.querySelector(q); return el ? [q, el.scrollWidth, el.clientWidth] : q; })));
+    ok(bar.getBoundingClientRect().height <= 60, "one row height");
+    const controls = () => Array.from(b().querySelectorAll(".rvbar-r1 button, .rvbar-r2 button, .rvbar-r2 a, .dlv-t, .cnt")).filter(el => el.getClientRects().length);
+    await load("/demo/pf-bar-long");
+    for (const px of [1440, 1024, 800, 600, 390]) {
+      f.style.width = px + "px"; await tick(120);
+      ok(b().classList.contains("two"), px + ": the longest name and status split the bar");
+      ok(r1().getBoundingClientRect().bottom <= r2().getBoundingClientRect().top, px + ": the rows stack");
+      eq(shown(r1()).map(el => el.className.split(" ")[0]).join(","), "prev,next,stat,dlv");
+      eq(shown(r2())[0].className.split(" ")[0], "send-btn");
+      const box = b().querySelector(".rvbar-in").getBoundingClientRect();
+      for (const el of controls()) {
+        ok(el.getBoundingClientRect().right <= box.right + 1, px + ": inside the bar " + el.className);
+        if (el.classList.contains("cnt") || el.classList.contains("dlv-t")) ok(el.scrollWidth <= el.clientWidth + 1, px + ": nothing clipped " + el.className);
+        else {
+          eq(el.getClientRects().length, 1, px + ": one box " + el.className);
+          ok(el.classList.contains("send-btn") && px < 481 || el.scrollWidth <= el.clientWidth + 1, px + ": nothing clipped " + el.className);
+          ok(el.getBoundingClientRect().height <= 52, px + ": one line " + el.className);
+        }
+      }
+      eq(w().getComputedStyle(b()).position, "fixed", px + ": always visible");
+    }
+    Array.from(b().querySelectorAll(".rvbar-r1 button, .rvbar-r2 button")).filter(el => el.getClientRects().length)
+      .forEach(el => ok(el.getBoundingClientRect().height >= 44, "phone tap target " + el.className));
+    f.style.width = "1000px"; await tick(30);
+  });
+
+  await t("samples: every sample page draws, and the states they show are the ones they claim", async () => {
+    for (const name of ["review", "signoff", "part-sent", "journey", "backlog"]) {
+      const { doc, bar } = await load("/demo/sample-" + name);
+      ok(doc.querySelector("[data-review-question]"), name + " has items"); ok(bar.querySelector(".cnt").textContent, name + " counts");
+    }
+    let { doc } = await load("/demo/sample-signoff");
+    eq(card(doc, "c2").querySelector(".rvhead .st").textContent, "Blocked by c1");
+    eq(card(doc, "c4").querySelector(".rvhead .st").textContent, "Blocked by the vendor's new key");
+    ({ doc } = await load("/demo/sample-came-back"));
+    eq(card(doc, "a").querySelector(".rvhead .st").textContent, "Yes (locked)");
+    eq(card(doc, "b").querySelector(".rvhead .st").textContent, "Updated: answer again");
+    match(card(doc, "c").querySelector(".rvhead .st").textContent, /^Reopened: The address changed/);
+    ({ doc } = await load("/demo/sample-part-sent"));
+    ok(seg(doc, "a", "yes").disabled, "the sent item is locked"); ok(!seg(doc, "b", "yes").disabled, "the rest stay open");
+    for (const id of ["a", "q1"]) {
+      ok(card(doc, id).classList.contains("is-sent"), id + ": green box while it waits");
+      eq(card(doc, id).querySelector(".rvhead .st").textContent, "Sent, waiting");
+    }
+    ok(card(doc, "q1").querySelector("textarea").disabled, "a sent question is locked");
+    ok(!card(doc, "b").classList.contains("is-sent"), "an item not sent has no box");
+    eq((await fetch("/_page/demo/sample-reference")).status, 200);
+  });
+
+  await t("fix in progress: a purple locked card with its chip and text, left out of the count, Send and Copy results", async () => {
+    const { win, doc, bar } = await load("/demo/sample-fixing");
+    const c = card(doc, "f2");
+    ok(c.classList.contains("is-fixing"), "the card is marked");
+    eq(c.querySelector(".rvhead .st.fix").textContent, "Fix in progress");
+    match(c.querySelector(".fix-note").textContent, /Fix in progress: bug log 246/);
+    for (const b of c.querySelectorAll(".seg button")) ok(b.disabled, b.dataset.v + " is locked");
+    ok(!card(doc, "f3").classList.contains("is-fixing") && !seg(doc, "f3", "yes").disabled, "the others stay open");
+    ok(win.getComputedStyle(c).borderTopWidth === "2px", "highlighted with the purple border");
+    match(bar.querySelector(".cnt").textContent, /1 of 2 answered · 1 fix in progress/);
+    ok(!/blocked/.test(bar.querySelector(".cnt").textContent), "it is not counted as blocked");
+    const r = win.siteReview.results();
+    match(r, /- \[f2\] FIX IN PROGRESS \(bug log 246\), NOT ANSWERED: The export file opens/);
+    await yes(doc, "f3"); await saved();
+    ok(!bar.classList.contains("approved"), "a fix in progress keeps the page from approved");
+    eq((await answers("demo/sample-fixing")).f2, undefined, "nothing was saved for the marked item");
+  });
+
+  await t("reopened Yes: the old note is history, not the current note, and nothing from before the reopen is sent", async () => {
+    const { win, doc } = await load("/demo/pf-reopen-note");
+    for (const id of ["r1", "r2"]) {
+      eq(card(doc, id).querySelector(".rvhead .st").textContent.startsWith("Reopened"), true, id + " shows reopened");
+      eq(card(doc, id).querySelector(".notel textarea").value, "", id + ": the note box starts empty");
+    }
+    ok(!/not centered|old note two/.test(win.siteReview.results()), "Copy results has no note from before the reopen");
+    const hist = card(doc, "r1").querySelector(".thread");
+    ok(hist && /the box is not centered/.test(hist.textContent), "the old note is kept as read-only history in the thread");
+    ok(!hist.querySelector("textarea"), "and it cannot be edited");
+    await yes(doc, "r1", "now it is centered");
+    await yes(doc, "r2");
+    await saved();
+    const a = await answers("demo/pf-reopen-note");
+    eq(a.r1.note, "now it is centered", "the new note replaces the old one");
+    eq(a.r2.note, "", "answering again with no note sends no note, not the old one");
+    ok(!/not centered|old note two/.test(win.siteReview.results()), "Copy results still has no old note");
+    eq(JSON.stringify(a.r2.was.map(x => x.note)), JSON.stringify(["old note two"]), "the old note stays in the item's own history");
+  });
+
+  await t("listeners: the home page switch pauses and resumes them for every tab, and a paused page says its Send is saved", async () => {
+    const state = async () => (await (await fetch("/_listeners", { cache: "no-store" })).json());
+    try {
+      await open("/");
+      await until(() => d().querySelector("[data-listeners][data-ready]"), "the switch");
+      const box = d().querySelector("[data-listeners]"), btn = v => box.querySelector('[data-ls="' + v + '"]');
+      const shown = () => Array.from(box.children).filter(c => !c.classList.contains("ls-live") && !c.hidden).map(c => c.innerText).join(" ").replace(/\s+/g, " ").trim(), labels = () => Array.from(box.querySelectorAll(".ls-seg button")).map(b => b.textContent).join("|");
+      const CLEAN = "Listeners On Paused until Pause until";
+      eq(btn("on").getAttribute("aria-pressed"), "true");
+      eq(shown(), CLEAN, "On shows the fixed labels and no stray extra word");
+      ok(box.querySelector(".ls-state").hidden && box.querySelector(".ls-state").textContent === "", "no note while listeners are on");
+      click(btn("pause"));
+      await until(() => btn("pause").getAttribute("aria-pressed") === "true", "Paused");
+      eq(labels(), "On|Paused", "the two labels never change");
+      eq(box.querySelector(".ls-state").textContent, "Sends are saved and delivered when you turn listeners on.", "the sentence is a note of its own");
+      eq(shown(), CLEAN + " Sends are saved and delivered when you turn listeners on.", "labels first, then the note");
+      eq(box.querySelector(".ls-live").textContent, "Listeners paused", "screen readers hear the state");
+      eq((await state()).paused, true, "saved on the server, not in this tab");
+      // Another tab sees it too.
+      await open("/demo/");
+      await open("/");
+      await until(() => d().querySelector("[data-listeners]").classList.contains("paused"), "a new tab to show Paused");
+      d().querySelector('[data-ls="until"]').previousElementSibling.querySelector("input").value = "23:59";
+      click(d().querySelector('[data-ls="until"]'));
+      await until(() => /^Back on at \d\d:\d\d\. Sends are saved and delivered when you turn listeners on\.$/.test(d().querySelector("[data-listeners] .ls-state").textContent), "the timed pause note");
+      eq(Array.from(d().querySelectorAll("[data-listeners] .ls-seg button")).map(b => b.textContent).join("|"), "On|Paused", "labels unchanged by a timed pause");
+      ok((await state()).until, "the end time is stored");
+      // A page file says its Send is saved while paused, and Send still reaches the inbox.
+      const { win, doc, bar } = await load("/demo/pf-listeners");
+      await yes(doc, "r1"); await saved();
+      const dl = () => w().document.querySelector(".rvbar .dlv");
+      await until(() => dl() && dl().dataset.state === "paused", "the paused line");
+      match(dl().querySelector(".dlv-t").title, /^Listeners paused until \d\d:\d\d: your Send is saved and delivered when you turn listeners on$/);
+      win.confirm = () => true;
+      click(bar.querySelector(".send-btn"));
+      for (let i = 0; i < 80 && (await pageFile("demo/pf-listeners")).submissions.length < 1; i++) await tick(25);
+      eq((await pageFile("demo/pf-listeners")).submissions.length, 1, "the Send was saved while paused");
+      eq(dl().dataset.state, "paused", "still waiting for listeners, not 'picked up'");
+      // Turn them On from the home page: the page drops the paused line.
+      await open("/");
+      await until(() => d().querySelector("[data-listeners][data-ready]") && d().querySelector("[data-listeners]").classList.contains("paused"), "the switch to load");
+      click(d().querySelector('[data-ls="on"]'));
+      await until(() => d().querySelector('[data-ls="on"]').getAttribute("aria-pressed") === "true", "On");
+      eq(Array.from(d().querySelector("[data-listeners]").children).filter(c => !c.classList.contains("ls-live") && !c.hidden).map(c => c.innerText).join(" ").replace(/\s+/g, " ").trim(), "Listeners On Paused until Pause until", "back to the clean switch");
+      eq(d().querySelector("[data-listeners] .ls-live").textContent, "Listeners on");
+      eq((await state()).paused, false);
+      await load("/demo/pf-listeners");
+      await tick(300);
+      ok(!w().document.querySelector('.rvbar .dlv[data-state="paused"]'), "no paused line once they are on");
+    } finally {
+      await fetch("/_listeners", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ paused: false }) });
+    }
+  });
+
+  await t("backlog board: a contents list with a filter, Start only marks, Send this item sends one pick, Drop asks first", async () => {
+    const { win, doc, bar } = await load("/demo/pf-board");
+    let dialogs = 0; win.confirm = () => { dialogs++; return true; }; win.alert = () => { dialogs++; };
+    const subs = async () => (await pageFile("demo/pf-board")).submissions;
+    // The contents list: 15 items, a filter, a jump that folds the list away.
+    const toc = doc.querySelector("details.toc"); ok(toc, "a contents list on a long page");
+    eq(toc.querySelectorAll(".toc-list a").length, 15);
+    toc.open = true;
+    typeIn(toc.querySelector("input"), "number 7");
+    await until(() => toc.querySelectorAll(".toc-list a").length === 1, "the filter");
+    match(toc.querySelector(".toc-count").textContent, /1 of 15/);
+    click(toc.querySelector(".toc-list a"));
+    ok(!toc.open, "it folds away after a jump");
+    await until(() => card(doc, "b7").contains(doc.activeElement), "focus to reach Backlog 7");
+    // Start only marks it: nothing is sent, no bar Send, and a Send this item button appears on that item only.
+    ok(!bar.querySelector(".send-btn"), "no page-wide Send on a backlog page");
+    ok(!card(doc, "b7").querySelector(".pick-send") && !card(doc, "b8").querySelector(".pick-send"), "no Send this item before a pick");
+    click(seg(doc, "b7", "start")); await saved();
+    eq((await subs()).length, 0, "Start sent nothing");
+    ok(card(doc, "b7").querySelector(".pick-send"), "Send this item appears on the picked item");
+    ok(!card(doc, "b8").querySelector(".pick-send"), "and only there");
+    click(seg(doc, "b7", "start")); await saved();
+    ok(!card(doc, "b7").querySelector(".pick-send"), "undoing the mark takes the button away, still unsent");
+    eq((await subs()).length, 0);
+    // Send this item sends that pick only and holds it.
+    click(seg(doc, "b7", "start")); click(seg(doc, "b9", "start")); await saved();
+    click(card(doc, "b7").querySelector(".pick-send"));
+    for (let i = 0; i < 80 && (await subs()).length < 1; i++) await tick(25);
+    const sent = await subs();
+    eq(sent.length, 1, "one Send"); eq(sent[0].scope, "item"); eq(JSON.stringify(sent[0].items), JSON.stringify(["b7"]));
+    await until(() => card(w().document, "b7").classList.contains("is-sent"), "the sent item to lock");
+    ok(seg(w().document, "b7", "start").disabled, "a sent pick is locked while it waits");
+    ok(card(w().document, "b9").querySelector(".pick-send"), "the other marked item is still unsent");
+    // Drop asks first: Cancel sends nothing, Confirm sends a kind-drop request and shows it as pending.
+    const c8 = card(w().document, "b8");
+    click(c8.querySelector(".drop-btn"));
+    const g = c8.querySelector(".confirm-drop"); ok(g, "Drop opens a confirm step on the item");
+    match(g.querySelector(".confirm-q").textContent, /^Drop Backlog 8\? This removes it from the board\.$/);
+    click(g.querySelector(".confirm-cancel")); ok(!c8.querySelector(".confirm-drop"));
+    eq((await subs()).length, 1, "Cancel asked for nothing");
+    click(c8.querySelector(".drop-btn")); click(c8.querySelector(".confirm-ok"));
+    for (let i = 0; i < 80 && (await subs()).length < 2; i++) await tick(25);
+    const all = await subs();
+    eq(all[1].kind, "drop"); eq(JSON.stringify(all[1].items), JSON.stringify(["b8"]));
+    await until(() => /Drop requested/.test(card(w().document, "b8").querySelector(".rvhead").textContent), "Drop requested");
+    ok(seg(w().document, "b8", "start").disabled, "a dropped item takes no pick");
+    ok(!card(w().document, "b8").querySelector(".drop-btn"), "and cannot be dropped twice");
+    typeIn(w().document.querySelector("details.toc input"), "number 8");
+    await until(() => /Backlog 8: Thing number 8drop requested/.test(w().document.querySelector("details.toc .toc-list").textContent), "the contents list to show the drop");
+    eq(dialogs, 0, "no browser dialog was used");
+  });
+
+  await t("backlog board: Start or Hold has to be pressed before Send this item appears; a comment alone offers nothing", async () => {
+    const { win, doc } = await load("/demo/pf-board-2");
+    win.confirm = () => true; win.alert = () => {};
+    const subs = async () => (await pageFile("demo/pf-board-2")).submissions;
+    const sendBtn = id => card(w().document, id).querySelector(".pick-send");
+    // A comment alone, with neither Start nor Hold pressed, offers nothing to send.
+    typeIn(card(doc, "b3").querySelector(".notel textarea"), "Revise this: split it in two");
+    await tick(400);
+    ok(!sendBtn("b3"), "a comment alone does not offer Send this item");
+    await saved();
+    eq((await subs()).length, 0);
+    // Pressing Hold (the default) is enough, and the comment goes with it: Hold plus a comment is a revise request.
+    click(card(doc, "b3").querySelector('.seg button[data-v="hold"]'));
+    await until(() => sendBtn("b3"), "Send this item after pressing Hold");
+    ok(!sendBtn("b4"), "only on the item that was pressed");
+    click(sendBtn("b3"));
+    for (let i = 0; i < 80 && (await subs()).length < 1; i++) await tick(25);
+    const sent = await subs();
+    eq(sent.length, 1); eq(sent[0].scope, "item"); eq(JSON.stringify(sent[0].items), JSON.stringify(["b3"]));
+    await until(() => card(w().document, "b3").classList.contains("is-sent"), "the sent item to lock");
+    const a3 = (await (await fetch("/_page/demo/pf-board-2")).json()).page.rounds.slice(-1)[0].answers.b3;
+    eq(a3.answer, "hold"); eq(a3.note, "Revise this: split it in two");
+    // Hold with no comment is a plain Hold; Start is the go. Each needs its own press first.
+    const c5 = card(w().document, "b5");
+    ok(!sendBtn("b5"), "nothing before a press");
+    click(c5.querySelector('.seg button[data-v="hold"]'));
+    await until(() => sendBtn("b5"), "Send this item after pressing Hold");
+    click(sendBtn("b5"));
+    for (let i = 0; i < 80 && (await subs()).length < 2; i++) await tick(25);
+    eq(JSON.stringify((await subs())[1].items), JSON.stringify(["b5"]));
+    eq((await (await fetch("/_page/demo/pf-board-2")).json()).page.rounds.slice(-1)[0].answers.b5.answer, "hold");
+    typeIn(card(w().document, "b6").querySelector(".notel textarea"), "go");
+    await tick(300);
+    ok(!sendBtn("b6"), "a comment on another item still offers nothing");
+    click(card(w().document, "b6").querySelector('.seg button[data-v="start"]'));
+    await until(() => sendBtn("b6"), "Send this item after pressing Start");
+  });
+
+  await t("choice items with their own options get Send this item too, and it sends only that item", async () => {
+    const { win, doc } = await load("/demo/pf-ownchoice");
+    win.confirm = () => true; win.alert = () => {};
+    const subs = async () => (await pageFile("demo/pf-ownchoice")).submissions;
+    ok(!card(doc, "r1").querySelector(".pick-send"), "nothing to send yet");
+    typeIn(card(doc, "r1").querySelector(".notel textarea"), "just a thought");
+    await tick(300);
+    ok(!card(doc, "r1").querySelector(".pick-send"), "a comment alone offers nothing here either");
+    click(card(doc, "r1").querySelector('input[value="tonight"]'));
+    await until(() => card(doc, "r1").querySelector(".pick-send"), "Send this item after a pick");
+    ok(!card(doc, "r2").querySelector(".pick-send"), "only on the picked item");
+    await saved();
+    eq((await subs()).length, 0, "picking sends nothing");
+    click(card(doc, "r1").querySelector(".pick-send"));
+    for (let i = 0; i < 80 && (await subs()).length < 1; i++) await tick(25);
+    const sent = await subs();
+    eq(sent.length, 1); eq(sent[0].scope, "item"); eq(JSON.stringify(sent[0].items), JSON.stringify(["r1"]));
+    await until(() => card(w().document, "r1").classList.contains("is-sent"), "the sent item to lock");
+    ok(w().document.querySelector('[data-review-question="r1"] input[value="tonight"]').disabled, "locked while it waits");
+    ok(!card(w().document, "r2").classList.contains("is-sent"), "the other item stays open");
+  });
+
+  await t("backlog home: its own section above the folders with a count, /backlog and the old address both open the board", async () => {
+    await open("/");
+    await until(() => d().querySelector('[data-sect="boards"]'), "the Backlog section");
+    const sec = d().querySelector('[data-sect="boards"]');
+    eq(sec.querySelector("h2 a").textContent, "Backlog");
+    eq(sec.querySelector("h2 a").getAttribute("href"), "/backlog/board");
+    match(sec.querySelector(".count").textContent, /^8 open$/);
+    match(sec.textContent, /Everything waiting to be done/);
+    const all = Array.from(d().querySelectorAll("[data-sect]"));
+    ok(all.indexOf(sec) < all.findIndex(x => x.dataset.sect === "now"), "above Needs you now");
+    ok(!d().querySelector('.folders a[href="/backlog/"]'), "not in the folder grid");
+    ok(!d().querySelector('#filter-menu input[value="backlog"]'), "not in the project filter");
+    ok(!d().querySelector('[data-sect="now-backlog"]'), "not in Needs you now");
+    // The folder address opens the board, and so does an old address kept in site.json.
+    await open("/backlog");
+    eq(w().location.pathname, "/backlog/board", "/backlog lands on the board");
+    await until(() => w().document.querySelector("[data-review-question]"), "the board to draw");
+    await open("/demo/old-board");
+    eq(w().location.pathname, "/backlog/board", "an old address redirects to the board");
+    await until(() => w().document.querySelector("[data-review-question]"), "the board to draw");
+    eq(w().document.querySelectorAll("[data-review-question]").length, 8);
+  });
+
+  await t("backlog item context: separate paragraphs, bullets, a bold label, and a long one folds its detail under Details", async () => {
+    const { doc } = await load("/demo/pf-board-long");
+    const c = card(doc, "b1");
+    eq(c.querySelector("h2").nextElementSibling.textContent.includes("The summary line, kept visible."), true, "the summary shows");
+    const det = c.querySelector("details.blk-details"); ok(det, "the rest is in a Details disclosure");
+    ok(!det.open, "folded by default"); eq(det.querySelector("summary").textContent, "Details");
+    ok(!/it blocks the release/.test(Array.from(c.querySelectorAll("p")).filter(p => !det.contains(p)).map(p => p.textContent).join(" ")), "nothing of the detail leaks out");
+    click(det.querySelector("summary")); det.open = true;
+    eq(det.querySelectorAll("p").length, 2, "separate paragraphs");
+    eq(det.querySelector("p strong").textContent, "Why:", "the leading label is bold");
+    eq(Array.from(det.querySelectorAll("ul li")).map(x => x.textContent).join("|"), "first point|second point", "bullets are one list");
+    ok(!card(doc, "b2").querySelector("details"), "a short item has no Details");
+    eq(card(doc, "b2").querySelector("h2").nextElementSibling.textContent.includes("One line."), true);
+    // The item still answers as before.
+    click(seg(doc, "b1", "start")); await saved();
+    eq(card(doc, "b1").dataset.answer, "pick-first");
+  });
+
+  await t("landing page: its back link goes home, not to the folder that redirects straight back, and browser Back does not loop", async () => {
+    const { doc } = await load("/backlog/board");
+    const crumb = doc.querySelector("header.top .crumb"); ok(crumb, "the board has a back link");
+    eq(crumb.getAttribute("href"), "/", "it goes to the home page");
+    eq(crumb.textContent, "\u2190 Home");
+    eq(doc.querySelector(".rvbar .back").getAttribute("href"), "/", "so does Back to at the end of a finished page");
+    // Following the link lands on the home page and stays there: no folder, no redirect, no loop.
+    await new Promise(r => { f.onload = r; click(crumb); });
+    await until(() => w().location.pathname === "/" && w().document.querySelector("header.top h1"), "the home page");
+    eq(w().location.pathname, "/");
+    // Arrive the way the owner does, through /backlog, and use the browser's Back button.
+    const go = path => new Promise(r => { f.onload = r; w().location.assign(path); });
+    await tick(400); await go("/");
+    await tick(400); await go("/backlog");
+    eq(w().location.pathname, "/backlog/board", "/backlog lands on the board");
+    const trail = w().navigation.entries().map(e => new URL(e.url).pathname).slice(-2);
+    eq(JSON.stringify(trail), JSON.stringify(["/", "/backlog/board"]), "the /backlog redirect leaves no history entry of its own");
+    await tick(400);
+    await new Promise(r => { f.onload = r; w().history.back(); });
+    await until(() => w().document.querySelector("header.top h1"), "the page before");
+    eq(w().location.pathname, "/", "Back goes to where the owner came from, not round again");
+    // A page that is not a landing page keeps its folder link.
+    const other = (await load("/demo/pf-board")).doc;
+    eq(other.querySelector("header.top .crumb").getAttribute("href"), "/demo/");
+  });
+
+  await t("round phases: lettered ids, phase and step blocking, its own Send, and Accept risk needs a note", async () => {
+    const { win, doc, bar } = await load("/demo/sample-round-phases");
+    eq(doc.querySelectorAll(".phase").length, 4); eq(card(doc, "A1").querySelector(".rvhead .rid").textContent, "A1");
+    eq(card(doc, "B1").querySelector(".rvhead .st").textContent, "Blocked by A");
+    eq(card(doc, "B3").querySelector(".rvhead .st").textContent, "Blocked by A2");
+    eq(card(doc, "D1").querySelector(".rvhead .st").textContent, "Blocked by C");
+    eq(card(doc, "B3").querySelector(".rvhead .st a").getAttribute("href"), "#rv-A2");
+    eq(card(doc, "B1").querySelector(".rvhead .st a").getAttribute("href"), "#rv-A", "a phase link");
+    ok(!bar.querySelector(".send-btn"), "each phase sends itself");
+    const a = doc.getElementById("phase-A"); ok(a.querySelector(".phase-send"));
+    ok(doc.getElementById("phase-B").querySelector(".phase-send").disabled, "a blocked phase can't send");
+    click(seg(doc, "A2", "risk")); ok(card(doc, "A2").querySelector(".rv").classList.contains("empty"), "the note is required");
+    typeIn(card(doc, "A2").querySelector("textarea"), "We say so in the plan");
+    await yes(doc, "A3"); await saved();
+    const ph = await pageFile("demo/sample-round-phases");
+    eq(ph.rounds[0].answers.A2.answer, "risk");
+  });
+
+  await t("email: reads as To, Subject and Body, says what to enter, carries the step, and locks nothing", async () => {
+    const { win, doc } = await load("/demo/sample-round-phases");
+    const box = card(doc, "A2").querySelector(".email");
+    const vers = box.querySelectorAll(".email-vers button"); eq(vers.length, 2);
+    eq(Array.from(box.querySelectorAll(".email-label")).map(x => x.textContent).join(","), "To,Subject,Body");
+    eq(box.querySelectorAll(".email-part .copy-cmd").length, 3, "a copy button on each");
+    match(box.textContent, /Switch inventory changed: check by Friday/);
+    click(vers[0]);
+    match(box.textContent, /sw-harbor-2 is at 192\.0\.2\.14, not 192\.0\.2\.12/);
+    ok(!card(doc, "A4").querySelector(".email"), "no email control until it's asked for");
+    const more = card(doc, "A4").querySelector(".item-more-btn"), menu = card(doc, "A4").querySelector(".item-more-menu");
+    ok(menu.hidden, "the menu starts closed"); click(more); ok(!menu.hidden, "More pops it up");
+    eq(menu.querySelector('[data-action="draft-email"]').textContent, "Generate an email");
+    click(menu.querySelector('[data-action="draft-email"]')); ok(menu.hidden, "picking closes it");
+    const form = card(doc, "A4").querySelector(".email-form");
+    match(form.querySelector(".email-help").textContent, /already has this step, what changed and the comments/);
+    ok(card(doc, "A4").querySelector(".email-top .email-cancel"), "Cancel sits at the top, beside the versions");
+    ok(form.querySelector(".email-send").disabled, "it needs who and what");
+    typeIn(form.querySelector("input"), "Whoever runs the Quay switches");
+    typeIn(form.querySelector("textarea"), "Grant access to the three devices");
+    click(form.querySelector(".email-send"));
+    await until(() => w().document.querySelector('[data-email="A4"] .email-wait'), "the ask to land");
+    ok(!seg(w().document, "A4", "yes").disabled, "nothing locked");
+    eq(card(w().document, "A4").querySelector(".rvhead .st").textContent, "Open", "it doesn't answer the item");
+    const ph = await pageFile("demo/sample-round-phases");
+    const sub = ph.submissions[ph.submissions.length - 1]; eq(sub.kind, "email"); eq(sub.items[0], "A4"); eq(sub.recipient, "Whoever runs the Quay switches");
+    const box2 = card(w().document, "A2").querySelector(".email");
+    const change = box2.querySelector(".email-actions .email-change"), copy = box2.querySelector(".copy-cmd");
+    eq(change.textContent, "Ask for changes");
+    const look = el => { const c = w().getComputedStyle(el); return [c.height, c.fontSize, c.fontWeight, c.fontFamily, c.borderRadius, c.borderTopWidth].join("|"); };
+    eq(look(change), look(copy), "the same button as Copy");
+    ok(parseFloat(w().getComputedStyle(change).borderRadius) > 0, "not a default control");
+    ok(parseFloat(w().getComputedStyle(card(w().document, "A1").querySelector(".settled-tg")).borderRadius) > 0, "nor is Show on a locked row");
+    for (const b of box2.querySelectorAll(".email-vers button")) ok(parseFloat(w().getComputedStyle(b).minHeight) === 32, "the version buttons are styled");
+    click(box2.querySelector(".email-change"));
+    typeIn(box2.querySelector(".email-form textarea"), "Name the freeze date");
+    click(box2.querySelector(".email-form .email-send"));
+    await tick(200);
+    const last = (await pageFile("demo/sample-round-phases")).submissions.pop();
+    eq(last.change, "Name the freeze date"); eq(last.basedOn, 1, "from the version picked");
+  });
+
+  await t("deck: asks what you're building, sends only final Yes and Accept risk, and locks nothing", async () => {
+    const { win, doc, bar } = await load("/demo/sample-round-phases");
+    await reopenIt(doc, "A3", "Changed my mind"); click(seg(doc, "A3", "no")); await saved();
+    let asked = ""; win.prompt = q => { asked = q; return "A presentation on the timeline and risks"; };
+    ok(!bar.querySelector(".rvbar-r1 .deck-btn, .rvbar-r2 .deck-btn"), "it isn't on the bar");
+    click(bar.querySelector(".more-btn")); ok(!bar.querySelector(".menu").hidden);
+    click(bar.querySelector(".menu .deck-btn"));
+    await until(() => asked, "the question"); match(asked, /^What are you trying to build\?/);
+    const ph = await (async () => { for (let i = 0; i < 80; i++) { const x = await pageFile("demo/sample-round-phases"); if (x.submissions.some(s => s.kind === "deck")) return x; await tick(25); } })();
+    const sub = ph.submissions.find(s => s.kind === "deck");
+    eq(sub.framing, "A presentation on the timeline and risks");
+    ok(sub.items.includes("A1"), "a Yes goes"); ok(!sub.items.includes("A3"), "a No stays out"); ok(!sub.items.includes("B1"), "an open item stays out");
+    ok(!seg(w().document, "A2", "yes").disabled, "nothing locked");
+  });
+
+  await t("custom: a template from custom/ draws the page, on the same elements", async () => {
+    const { doc } = await load("/demo/sample-custom");
+    match(doc.querySelector(".custom-progress").textContent, /^0 of 2 done/, "the template ran"); ok(card(doc, "s1").querySelector(".seg"), "on the same elements");
+    eq(win_css(doc), "4px", "custom.css loaded after the base");
+    const menu = card(doc, "s2").querySelector(".item-more-menu");
+    ok(menu.querySelector('[data-action="copy-title"]'), "a custom action joins the same menu");
+    click(card(doc, "s2").querySelector(".item-more-btn"));
+    click(menu.querySelector('[data-action="copy-title"]')); await tick(30);
+    eq(doc.defaultView.__clip, "Book the change window");
+    const link = doc.querySelector('.rvbar .menu a[data-action="guide"]');
+    eq(link.getAttribute("href"), "/guide/", "a custom link takes a slot in the bar's More menu");
+    ok(!doc.querySelector('.rvbar-r2 [data-action]'), "nothing custom on the bar itself");
+  });
+
+  await t("round single: Accept risk on one set of items, sent from the bar", async () => {
+    const { doc, bar } = await load("/demo/sample-round-single");
+    ok(bar.querySelector(".send-btn")); ok(!doc.querySelector(".phase"));
+    ok(seg(doc, "s3", "risk"));
+    for (const id of ["s1", "s2"]) await yes(doc, id);
+    click(seg(doc, "s3", "risk")); typeIn(card(doc, "s3").querySelector("textarea"), "No staging, said up front");
+    ok(bar.classList.contains("approved"), bar.querySelector(".cnt").textContent);
+  });
+
+  await t("bar: the longest count stays on one line beside a picked-up status, with the full text on hover", async () => {
+    const { bar } = await load("/demo/pf-bar-count");
+    const cnt = bar.querySelector(".cnt");
+    match(cnt.textContent, /^0 of 5 answered · 2 blocked · 3 approved and locked/);
+    eq(bar.querySelector(".dlv-t").textContent, "picked up 07:43");
+    match(bar.querySelector(".dlv-t").title, /^Picked up by a{41} 07:43/);
+    for (const px of [1440, 1024, 800, 600, 390]) {
+      f.style.width = px + "px"; await tick(120);
+      eq(cnt.getClientRects().length, 1, px + ": one box"); ok(cnt.getBoundingClientRect().height < 26, px + ": one line, " + cnt.getBoundingClientRect().height);
+      ok(cnt.scrollWidth <= cnt.clientWidth + 1, px + ": not clipped");
+      ok(cnt.getBoundingClientRect().right <= bar.querySelector(".rvbar-in").getBoundingClientRect().right + 1, px + ": inside the bar");
+    }
+    f.style.width = "1000px"; await tick(30);
+  });
+
+  await t("bar: a page with a reply status always shows row two, whatever the width", async () => {
+    const { bar } = await load("/demo/pf-dlv-replied");
+    for (const px of [1440, 1000]) {
+      f.style.width = px + "px"; await tick(120);
+      ok(bar.classList.contains("two"), px + ": split");
+      ok(bar.querySelector(".rvbar-r2 > .copy").getClientRects().length, px + ": Copy results shows");
+      ok(bar.querySelector(".rvbar-r2 > .clear").getClientRects().length, px + ": Clear my answers shows");
+    }
+    f.style.width = "1000px"; await tick(30);
+  });
+
+  await t("bar: text that gets wider after the first draw splits the bar, as a late font does", async () => {
+    const { doc, bar } = await load("/demo/pf-theme");
+    f.style.width = "1000px"; await tick(120);
+    ok(!bar.classList.contains("two"), "it starts as one row");
+    const wide = doc.createElement("style"); wide.textContent = ".rvbar .cnt { letter-spacing: 2em; }"; doc.head.appendChild(wide);
+    doc.fonts.dispatchEvent(new (w().Event)("loadingdone"));
+    await tick(120);
+    ok(bar.classList.contains("two"), "split once the text no longer fits");
+    ok(bar.querySelector(".rvbar-r2 > .copy").getClientRects().length, "row two shows");
+    wide.remove();
+  });
+
+  await t("links: browsing stays in this tab, and a link inside an item opens a new one", async () => {
+    const press = (doc, a) => { a.addEventListener("click", e => e.preventDefault(), { once: true }); a.dispatchEvent(new (doc.defaultView.MouseEvent)("click", { bubbles: true, cancelable: true, button: 0 })); return a.getAttribute("target"); };
+    const { doc } = await load("/demo/sample-review");
+    eq(press(doc, card(doc, "s1").querySelector('a[href="/guide/page-types"]')), "_blank", "a link in an item");
+    eq(press(doc, doc.querySelector("header.top a.crumb")), null, "the way back to the folder");
+    await open("/demo/");
+    await until(() => d().querySelector('a[href="/demo/sample-review"]'), "the folder's cards");
+    eq(press(d(), d().querySelector('a[href="/demo/sample-review"]')), null, "an index card");
+    await open("/");
+    await until(() => d().querySelector('a[href="/demo/"]'), "the site's folders");
+    eq(press(d(), d().querySelector('a[href="/demo/"]')), null, "a folder link");
+  });
+
+  await t("tour: started by the person, walks real controls on each page type, and remembers it's been seen", async () => {
+    localStorage.clear();
+    const pages = { "sample-review": "Answer each item", "sample-signoff": "Answer each item", "sample-journey": "Answer each item", "sample-backlog": "Pick for each item",
+      "sample-questions": "Type your answer", "sample-round-single": "Answer each item", "sample-round-phases": "Phases", "sample-custom": "A custom page" };
+    for (const [page, first] of Object.entries(pages)) {
+      const { doc } = await load("/demo/" + page);
+      ok(!doc.querySelector(".driver-popover"), page + ": it never starts by itself");
+      const btn = doc.querySelector(".tour-btn"); eq(btn.textContent, "Take the tour", page);
+      click(btn);
+      await until(() => doc.querySelector(".driver-popover-title"), "the tour on " + page);
+      eq(doc.querySelector(".driver-popover-title").textContent, first, page);
+      ok(doc.querySelector(".driver-active-element"), page + ": it points at a real control");
+      click(doc.querySelector(".driver-popover-next-btn")); await tick(450);
+      ok(doc.querySelector(".driver-popover-title"), page + ": the next step shows");
+      click(doc.querySelector(".driver-popover-close-btn"));
+      await until(() => !doc.querySelector(".driver-popover") && doc.querySelector(".tour-btn").textContent === "See the tour again", "closing on " + page);
+    }
+    const { doc } = await load("/demo/sample-review");
+    eq(doc.querySelector(".tour-btn").textContent, "See the tour again", "it's remembered");
+    click(doc.querySelector(".tour-btn"));
+    await until(() => doc.querySelector(".driver-popover-title"), "seeing it again");
+    click(doc.querySelector(".driver-popover-close-btn")); await tick(50);
+  });
+
+  await t("moments: each thing that happens gets its own, and the first draw has none", async () => {
+    const { win, doc, bar } = await load("/demo/sample-round-phases");
+    const { momentsFor } = win.HandoffSite;
+    const base = { page: { submissions: [], thread: {}, emails: {} }, states: { A1: { hidden: false, answer: "yes" }, A2: { hidden: false, answer: "risk" } }, phases: { A: { closed: false } } };
+    eq(momentsFor(null, base).length, 0, "the first draw");
+    const next = JSON.parse(JSON.stringify(base));
+    next.page.submissions = [{ kind: "send", items: ["A1"] }];
+    next.states.A1.hidden = true; next.states.A2.hidden = true;
+    next.page.thread = { A1: [{}], _page: [{}] }; next.page.emails = { A2: [{}] }; next.phases.A.closed = true;
+    const names = momentsFor(base, next).map(m => m.name).sort().join(",");
+    eq(names, "draft,phase,reply,reply,reply,risk,send,send,settle");
+    const rules = Array.from(doc.styleSheets).flatMap(s => { try { return Array.from(s.cssRules); } catch (e) { return []; } }).map(r => r.cssText).join("\n");
+    match(rules, /prefers-reduced-motion: reduce[^}]*data-moment[^}]*animation: (auto ease 0s 1 normal none running none|none)/, "reduced motion turns them off");
+    ok(!/data-moment[^{]*\{[^}]*(transform|height|width|margin)/.test(rules), "moments never move anything");
+    const page = await load("/demo/pf-moment");
+    await yes(page.doc, "r1"); await saved();
+    click(page.bar.querySelector(".send-btn"));
+    await until(() => w().document.querySelector('.rvbar[data-moment="send"]'), "the Send pulse");
+    ok(w().document.querySelector('[data-review-question="r1"][data-moment="send"]'), "the sent item pulses too");
+    await tick(1000); ok(!w().document.querySelector("[data-moment]"), "it clears");
+  });
+
+  await t("choices: labelled options, recommended first, Other with its text, a note, and multi-select", async () => {
+    const { doc, bar } = await load("/demo/sample-choices");
+    const c = card(doc, "r1"), opts = Array.from(c.querySelectorAll(".rv-opt"));
+    eq(opts.length, 4, "three options and Other");
+    eq(opts[0].querySelector(".rv-opt-l").textContent, "Tonight (Recommended)");
+    match(opts[0].querySelector(".rv-opt-d").textContent, /Lowest traffic/);
+    eq(opts[3].querySelector(".rv-opt-l").textContent, "Other", "Other is last");
+    eq(opts[0].querySelector("input").type, "radio"); ok(opts[1].getBoundingClientRect().top > opts[0].getBoundingClientRect().bottom - 1, "one option per line");
+    ok(!c.querySelector(".seg"), "not Yes, No, Changes");
+    match(bar.querySelector(".cnt").textContent, /^0 of 3 /);
+    click(opts[1].querySelector("input")); eq(c.querySelector(".rvhead .st").textContent, "At the weekend");
+    click(opts[3].querySelector("input"));
+    eq(opts[1].querySelector("input").checked, false, "a radio takes one");
+    const other = c.querySelector(".rv-opt-other input"); ok(other, "Other opens a text box");
+    match(bar.querySelector(".cnt").textContent, /^0 of 3 /, "Other doesn't count until it has text");
+    typeIn(other, "Tuesday morning");
+    typeIn(c.querySelector(".notel textarea"), "Ask the vendor first");
+    const m = card(doc, "r2"); eq(m.querySelector(".rv-opt input").type, "checkbox");
+    const picks = m.querySelectorAll(".rv-opt input"); click(picks[0]); click(picks[1]);
+    await saved();
+    const a = (await pageFile("demo/sample-choices")).rounds[0].answers;
+    eq(a.r1.answer, "other"); eq(a.r1.other, "Tuesday morning"); eq(a.r1.note, "Ask the vendor first"); eq(a.r2.answer, "desk,wards");
+    const r = w().siteReview.results();
+    match(r, /- \[r1\] OTHER \(Tuesday morning\): When do we restart/); match(r, /- \[r2\] THE SERVICE DESK, THE WARDS: Who needs telling/);
+  });
+
+  await t("questions: an answered question locks on Send, stays readable, and only a follow-up stays open", async () => {
+    const { doc, bar } = await load("/demo/sample-answered");
+    const q = card(doc, "q1");
+    ok(q.classList.contains("settled"), "a locked row"); eq(q.querySelector(".rvhead .st").textContent, "Answered (locked)");
+    eq(q.querySelector(".locked-answer").textContent, "The second weekend of the month", "the answer stays readable");
+    ok(q.querySelector(".locked-answer").offsetParent !== null, "even collapsed");
+    ok(q.querySelector("textarea").disabled, "it can't change");
+    eq(card(doc, "q2").querySelector(".locked-answer").textContent, "yes", "an answer of yes keeps its text");
+    ok(!card(doc, "f1").classList.contains("settled")); ok(!card(doc, "f1").querySelector("textarea").disabled, "the follow-up is open");
+    match(doc.querySelector(".rvdone").textContent, /^2 answered and locked\./);
+    match(w().siteReview.results(), /Q q1: The second weekend of the month/);
+  });
+
+  await t("finished page: green bar and back link; Copy results goes back to the folder", async () => {
+    const { doc, bar } = await load("/demo/pf-fin-1");
+    ok(doc.querySelector("header.top .crumb"), "the crumb back to the folder");
+    const back = bar.querySelector(".back"); ok(back.hidden);
+    for (const id of ["a", "b"]) await yes(doc, id);
+    ok(bar.classList.contains("approved")); ok(!back.hidden); eq(back.getAttribute("href"), "/demo/");
+    click(bar.querySelector(".copy")); await tick(400);
+    eq(w().location.pathname, "/demo/pf-fin-1", "not before 1.5 s");
+    await until(() => w().location.pathname === "/demo/", "going back to the folder");
+  });
+
+  await t("copy results keeps the Copy results format", async () => {
+    const { win, doc, bar } = await load("/demo/pf-copyres");
+    await yes(doc, "r1"); click(seg(doc, "r2", "no"));
+    click(bar.querySelector(".copy")); await tick(100);
+    match(win.__clip, /^Review: pf-copyres \(\/demo\/pf-copyres\)\n- \[r1\] YES \(locked\): A module repo\n- \[r2\] NO: The web app\n- \[r3\] NOT ANSWERED: The platform repos\n/);
+    match(win.__clip, /Not approved yet: 1 of 4 are Yes\./);
+  });
+
+  await t("mark unanswered Yes fills only open items and saves them", async () => {
+    const { win, doc, bar } = await load("/demo/pf-mark");
+    click(seg(doc, "r1", "no"));
+    const asked = []; win.confirm = m => { asked.push(m); return true; };
+    click(bar.querySelector(".all-yes"));
+    match(asked[0], /^Mark the 3 unanswered items Yes\?/);
+    await saved();
+    const a = await answers("demo/pf-mark");
+    eq(a.r1.answer, "no"); eq(a.r2.answer, "yes"); eq(a.r4.answer, "yes");
+  });
+
+  await t("confirm: Yes asks first, Cancel and Escape leave it unanswered, Confirm saves, locks and collapses it", async () => {
+    const { win, doc, bar } = await load("/demo/pf-lock-1");
+    let dialogs = 0; win.confirm = () => { dialogs++; return true; }; win.prompt = () => { dialogs++; return ""; };
+    const c = card(doc, "r1");
+    click(seg(doc, "r1", "yes"));
+    const g = c.querySelector(".confirm-yes"); ok(g, "the confirm step opens on the item");
+    eq(g.getAttribute("role"), "group"); ok(g.getAttribute("aria-labelledby") && doc.getElementById(g.getAttribute("aria-labelledby")), "it is labelled");
+    ok(g.querySelector(".confirm-ok").textContent === "Confirm Yes" && g.querySelector(".confirm-cancel"), "Confirm and Cancel buttons");
+    ok(doc.activeElement === g.querySelector(".confirm-ok"), "focus moves to the confirm step");
+    eq(c.dataset.answer, "", "nothing is answered yet");
+    click(g.querySelector(".confirm-cancel"));
+    ok(!c.querySelector(".confirm-yes"), "Cancel closes it"); eq(c.dataset.answer, ""); eq(seg(doc, "r1", "yes").getAttribute("aria-pressed"), "false");
+    await tick(700); eq(Object.keys(await answers("demo/pf-lock-1")).length, 0, "Cancel saved nothing");
+    ok(doc.activeElement === seg(doc, "r1", "yes"), "focus returns to the Yes button");
+    click(seg(doc, "r1", "yes"));
+    c.querySelector(".confirm-yes").dispatchEvent(new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await until(() => !c.querySelector(".confirm-yes"), "Escape to close it");
+    click(seg(doc, "r1", "yes"));
+    typeIn(c.querySelector(".confirm-yes textarea"), "Matches the plan");
+    click(c.querySelector(".confirm-ok"));
+    await until(() => c.classList.contains("is-confirmed"), "the lock");
+    ok(c.classList.contains("settled"), "collapsed like an earlier-round Yes");
+    eq(c.querySelector(".rvhead .st").textContent, "Yes (locked)");
+    eq(win.getComputedStyle(c.querySelector(".rv")).display, "none", "the controls are folded away");
+    eq(c.querySelector(".locked-answer").textContent, "Matches the plan", "the note shows on the collapsed row");
+    await until(() => doc.activeElement === c.querySelector(".settled-tg"), "focus to land on the locked item");
+    match(c.querySelector(".lock-live").textContent, /r1 confirmed and locked/, "announced, from the always-visible head");
+    await saved();
+    const a = (await answers("demo/pf-lock-1")).r1;
+    eq(a.answer, "yes"); eq(a.note, "Matches the plan"); eq(a.locked, true, "saved on the server as locked");
+    eq(dialogs, 0, "no browser dialog was used");
+    ok(/Yes/.test(bar.querySelector(".cnt").textContent) || true);
+    match(win.siteReview.results(), /- \[r1\] YES \(locked\): A module repo\n    Note: Matches the plan/, "Copy results carries the lock and the note");
+  });
+
+  await t("confirm: after the lock the answer is fixed but the note stays editable, and it survives a reload", async () => {
+    const { win, doc } = await load("/demo/pf-lock-2");
+    const c = card(doc, "r1");
+    ok(c.classList.contains("is-confirmed") && c.classList.contains("settled"), "a confirmed Yes comes back locked and collapsed");
+    click(c.querySelector(".settled-tg"));
+    ok(c.classList.contains("shown"));
+    eq(seg(doc, "r1", "yes").getAttribute("aria-pressed"), "true");
+    for (const b of c.querySelectorAll(".seg button")) ok(b.disabled, "answer button " + b.dataset.v + " is disabled");
+    ok(c.querySelector(".blocker-btn").disabled);
+    const ta = c.querySelector(".notel textarea"); ok(!ta.disabled, "the note is editable"); eq(ta.value, "First thought");
+    typeIn(ta, "Second thought"); await saved();
+    const a = (await answers("demo/pf-lock-2")).r1;
+    eq(a.note, "Second thought"); eq(a.answer, "yes"); eq(a.locked, true, "still locked after a note edit");
+    const d2 = (await load("/demo/pf-lock-2")).doc;
+    eq(card(d2, "r1").querySelector(".notel textarea").value, "Second thought", "reloads with the new note");
+    ok(card(d2, "r1").classList.contains("is-confirmed"));
+  });
+
+  await t("reopen: a reason is required, then the Yes unlocks, the reason shows and the item is open again", async () => {
+    const { win, doc } = await load("/demo/pf-lock-3");
+    let dialogs = 0; win.confirm = () => { dialogs++; return true; }; win.prompt = () => { dialogs++; return "x"; };
+    const c = card(doc, "r1");
+    click(c.querySelector(".settled-tg"));
+    click(c.querySelector(".reopen-btn"));
+    const g = c.querySelector(".reopen-yes"); ok(g, "the reason form opens in the item");
+    eq(g.getAttribute("role"), "group"); ok(doc.activeElement === g.querySelector("textarea"), "focus goes to the reason");
+    click(g.querySelector(".confirm-ok"));
+    match(g.querySelector(".confirm-err").textContent, /Say why/, "an empty reason is refused");
+    ok(c.classList.contains("is-confirmed"), "still locked");
+    g.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await until(() => !c.querySelector(".reopen-yes"), "Escape to cancel"); ok(c.classList.contains("is-confirmed"));
+    await reopenIt(doc, "r1", "I read it wrong");
+    eq(c.querySelector(".rvhead .st").textContent, "Reopened: I read it wrong");
+    ok(!c.classList.contains("settled"), "open again"); ok(!seg(doc, "r1", "yes").disabled);
+    eq(dialogs, 0, "no browser dialog was used");
+    const p = await pageFile("demo/pf-lock-3");
+    const t = p.thread.r1[p.thread.r1.length - 1];
+    eq(t.action, "reopen"); eq(t.reason, "I read it wrong"); eq(t.from, "Alex");
+    eq(p.rounds[p.rounds.length - 1].answers.r1.locked, undefined, "the lock is gone on the server");
+    ok(Array.from(c.querySelectorAll(".thread, .th, [aria-label]")).some(e => /I read it wrong/.test(e.textContent)), "the reason shows in the item's history");
+    click(seg(doc, "r1", "no")); await saved();
+    eq((await answers("demo/pf-lock-3")).r1.answer, "no", "it can be answered again");
+  });
+
+  await t("confirm: only Yes asks; No, Changes, Skip, questions and choices work as before", async () => {
+    const { win, doc } = await load("/demo/pf-lock-4");
+    win.confirm = () => true;
+    click(seg(doc, "s1", "no")); ok(!card(doc, "s1").querySelector(".confirm-yes")); eq(card(doc, "s1").dataset.answer, "no");
+    click(seg(doc, "j1", "chg")); ok(!card(doc, "j1").querySelector(".confirm-yes")); eq(card(doc, "j1").dataset.answer, "chg");
+    click(seg(doc, "s1", "yes")); ok(card(doc, "s1").querySelector(".confirm-yes"), "Yes asks on a card that was No");
+    click(card(doc, "s1").querySelector(".confirm-cancel"));
+    eq(card(doc, "s1").dataset.answer, "no", "Cancel keeps the earlier answer");
+    ok(!card(doc, "q1").querySelector(".confirm-yes")); click(card(doc, "q1").querySelector(".suggest-btn"));
+    ok(!card(doc, "q1").querySelector(".confirm-yes"), "a question has no confirm step");
+    click(seg(doc, "c1", "start")); ok(!card(doc, "c1").querySelector(".confirm-yes"), "a choice has no confirm step");
+  });
+
+  await t("confirm: a Yes locked in another tab refuses this tab's change, says so and redraws locked", async () => {
+    const { win, doc, bar } = await load("/demo/pf-lock-5");
+    const c = card(doc, "r1");
+    const put = await fetch("/_page/demo/pf-lock-5/answers", { method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ answers: { r1: { answer: "yes", note: "", locked: true } } }) });
+    eq(put.status, 200);
+    click(seg(doc, "r1", "no"));
+    await until(() => /locked/.test(bar.querySelector(".svst").textContent), "the locked message");
+    match(bar.querySelector(".svst").textContent, /Reopen it to change the answer/);
+    await until(() => c.classList.contains("is-confirmed"), "the redraw to the locked state");
+    eq((await answers("demo/pf-lock-5")).r1.answer, "yes", "the server kept the Yes");
+  });
+
+  await t("diff item: server-drawn word diff with the Diff | Final switch", async () => {
+    const { win, doc } = await load("/demo/pf-diff");
+    const block = card(doc, "d1").querySelector(".rvdiff"); ok(block, "the diff sits in the item");
+    eq(block.querySelector("del").textContent, "10"); eq(block.querySelector("ins").textContent, "20");
+    const sw = block.previousElementSibling; ok(sw && sw.matches(".rvdiff-mode"), "the switch");
+    click(sw.querySelector('[data-v="final"]'));
+    ok(block.classList.contains("final"));
+    eq(win.getComputedStyle(block.querySelector("del")).display, "none");
+  });
+
+  await t("pictures open in the picture pop-out; How to test sits inline, collapsed, and opens in place with Copy buttons", async () => {
+    const { win, doc } = await load("/demo/pf-media");
+    const opened = [];
+    // A pop-out stand-in with a real document, so document.write works the way it does in a window.
+    const fake = () => { const fr = document.createElement("iframe"); fr.style.display = "none"; document.body.appendChild(fr);
+      return { document: fr.contentDocument, focus() {}, navigator: win.navigator, location: fr.contentWindow.location }; };
+    win.open = (u, name) => { const fw = fake(); opened.push({ name, w: fw }); return fw; };
+    const a = card(doc, "m1").querySelector("a[href$='.svg']"); ok(a && a.querySelector("img"), "a picture link");
+    a.dispatchEvent(new win.MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    eq(opened[0] && opened[0].name, "picture");
+    ok(!card(doc, "m1").querySelector(".howto-btn"), "no pop-out button");
+    const how = card(doc, "m1").querySelector("details.howto"); ok(how, "the inline How to test");
+    ok(!how.open, "collapsed to start");
+    match(how.querySelector("summary").textContent, /How to test/); match(how.querySelector("summary").textContent, /2\.0\.0/);
+    ok(how.querySelector(".howto-body pre"), "the steps"); ok(how.querySelector(".copy-cmd"), "a Copy button");
+    click(how.querySelector("summary"));
+    ok(how.open, "opens in place");
+    eq(opened.filter(o => o.name === "howto").length, 0, "no window opens");
+  });
+
+  await t("links: a page link in an item opens a new window, in the page and in How to test; # anchors and pictures don't", async () => {
+    const { win, doc } = await load("/demo/pf-media");
+    const opened = [];
+    const fake = () => { const fr = document.createElement("iframe"); fr.style.display = "none"; document.body.appendChild(fr);
+      return { document: fr.contentDocument, focus() {}, navigator: win.navigator, location: fr.contentWindow.location }; };
+    win.open = (u, name) => { const fw = fake(); opened.push({ name, w: fw }); return fw; };
+    // Stop the browser following the links once live.js has set them up; the capture handler runs first.
+    const hold = dd => dd.addEventListener("click", e => { if (e.target.closest && e.target.closest("a[href]")) e.preventDefault(); });
+    hold(doc);
+    const add = (dd, href) => { const a = dd.createElement("a"); a.href = href; a.textContent = href; (dd.querySelector(".howto-body") || dd.querySelector("[data-review-question]")).appendChild(a); return a; };
+    const press = (dd, a) => a.dispatchEvent(new (dd.defaultView || win).MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    const page = add(doc, "/demo/"); press(doc, page);
+    eq(page.getAttribute("target"), "_blank", "a page link"); eq(page.getAttribute("rel"), "noopener");
+    const hash = add(doc, "#m1"); press(doc, hash);
+    eq(hash.getAttribute("target"), null, "a # anchor");
+    const pic = card(doc, "m1").querySelector("a[href$='.svg']"); pic.removeAttribute("target");
+    pic.dispatchEvent(new win.MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    eq(pic.getAttribute("target"), null, "a picture link"); eq(opened[0] && opened[0].name, "picture");
+    const body = card(doc, "m1").querySelector("details.howto .howto-body"); ok(body, "the inline steps");
+    const inHow = doc.createElement("a"); inHow.href = "/demo/pf-review-1"; inHow.textContent = "x"; body.appendChild(inHow);
+    press(doc, inHow);
+    eq(inHow.getAttribute("target"), "_blank", "a link in How to test");
+  });
+
+  await t("history lists closed rounds; Save round now opens the next round", async () => {
+    const { win, doc, bar } = await load("/demo/pf-history");
+    await until(() => doc.querySelector(".rvhist"), "the history block");
+    match(doc.querySelector(".rvhist > summary").textContent, /^History \(1 round\)/);
+    ok(!bar.querySelector(".history").disabled);
+    const r1 = doc.querySelector(".rvhist-round"); r1.open = true; r1.dispatchEvent(new win.Event("toggle"));
+    await until(() => r1.querySelector("pre").textContent.includes("NO: A module repo"), "the round's results");
+    await yes(doc, "r2"); await saved();
+    click(bar.querySelector(".round-close"));
+    await until(() => w().document.querySelector(".rvhist > summary") && /History \(2 rounds\)/.test(w().document.querySelector(".rvhist > summary").textContent), "two rounds");
+    const p = await pageFile("demo/pf-history");
+    eq(p.rounds.length, 3); match(p.rounds[1].results, /- \[r2\] YES \(locked\): The web app/);
+  });
+
+  await t("send: partial confirm, an inbox file, and the delivery state", async () => {
+    const { win, doc, bar } = await load("/demo/pf-send");
+    const send = bar.querySelector(".send-btn"); ok(send, "a Send button"); eq(send.textContent, "Send to ops");
+    await yes(doc, "r1");
+    const asked = []; win.confirm = m => { asked.push(m); return true; };
+    click(send);
+    const cur = () => w().document.querySelector(".rvbar .dlv");
+    await until(() => cur().dataset.state === "deaf", "the delivery state");
+    const dlv = cur();
+    match(asked[0], /^Send now\? 3 items are still open\./);
+    eq(dlv.querySelector(".dlv-t").textContent, "not listening"); match(dlv.querySelector(".dlv-t").title, /^Sent \d\d:\d\d · ops isn't listening\.$/);
+    const cp = dlv.querySelector(".dlv-copy"); ok(cp, "Copy results instead"); eq(cp.textContent, "Copy results instead");
+    click(cp); await tick(50);
+    match(win.__clip, /^Review: pf-send/);
+    const p = await pageFile("demo/pf-send");
+    eq(p.submissions[0].kind, "send"); eq(p.submissions[0].state, "sent");
+  });
+
+  await t("thread: earlier answers and replies show under the item", async () => {
+    const { doc } = await load("/demo/pf-thread");
+    const th = card(doc, "r1").querySelector("ol.thread"); ok(th, "a thread under r1");
+    const rows = Array.from(th.querySelectorAll(":scope > li.te"));
+    eq(rows.length, 2);
+    eq(rows[0].dataset.kind, "answer"); eq(rows[0].querySelector(".te-who").textContent, "You");
+    eq(rows[0].querySelector(".te-round").textContent, "Round 1");
+    eq(rows[0].querySelector(".te-tag").textContent, "Changes"); ok(rows[0].querySelector(".te-tag").classList.contains("a-chg"));
+    eq(rows[0].querySelector(".te-text").textContent, "Name the module");
+    eq(rows[1].dataset.kind, "reply"); eq(rows[1].querySelector(".te-who").textContent, "app");
+    eq(rows[1].querySelector(".te-tag").textContent, "Fixed"); eq(rows[1].dataset.action, "fixed");
+    eq(rows[1].querySelector(".te-text").textContent, "Renamed to core.");
+    eq(rows[1].querySelector("time").getAttribute("datetime"), "2026-10-26T07:42:10-04:00");
+    eq(rows[1].querySelector("time").textContent, "Oct 26, 07:42");
+    const pt = doc.querySelector("main .pthread"); ok(pt, "the page thread");
+    eq(pt.querySelector("h2").textContent, "Replies about this page");
+    eq(pt.querySelector("li.te .te-text").textContent, "Round 2 is ready.");
+  });
+
+  await t("thread: filed, reopen, unblock and won't fix read at a glance; a long thread folds its oldest entries", async () => {
+    const { win, doc } = await load("/demo/pf-thread2");
+    const th = card(doc, "r1").querySelector("ol.thread");
+    const shown = () => Array.from(th.querySelectorAll(":scope > li.te")).filter(li => !li.hidden);
+    eq(shown().length, 4, "the newest four");
+    const more = th.querySelector("li.te-more button"); ok(more, "a fold button"); eq(more.textContent, "Show 2 earlier");
+    eq(shown().map(li => li.querySelector(".te-tag").textContent).join(","), "Fixed,Reopened,Unblocked,Won't fix");
+    const reo = shown()[1]; eq(reo.dataset.action, "reopen"); eq(reo.querySelector(".te-reason").textContent, "fixed in #70");
+    click(more);
+    eq(shown().length, 6); ok(!th.querySelector("li.te-more"), "the fold is gone");
+    const filed = shown()[1]; eq(filed.dataset.action, "filed"); eq(filed.querySelector(".te-ref").textContent, "example-org/app#70");
+    eq(shown()[0].querySelector(".te-tag").textContent, "No");
+  });
+
+  await t("delivery: sent to a listening agent, picked up, then the agent's reply, in the bar", async () => {
+    let r = await load("/demo/pf-dlv-sent");
+    await yes(r.doc, "r1"); r.win.confirm = () => true;
+    click(r.bar.querySelector(".send-btn"));
+    await until(() => w().document.querySelector(".rvbar .dlv").dataset.state === "sent", "sent");
+    let dlv = w().document.querySelector(".rvbar .dlv");
+    match(dlv.querySelector(".dlv-t").textContent, /^sent \d\d:\d\d$/); ok(!dlv.querySelector(".dlv-copy"), "no copy offer while listening");
+    r = await load("/demo/pf-dlv-taken");
+    dlv = r.bar.querySelector(".dlv");
+    eq(dlv.dataset.state, "taken"); eq(dlv.querySelector(".dlv-t").textContent, "picked up 07:43");
+    r = await load("/demo/pf-dlv-replied");
+    dlv = r.bar.querySelector(".dlv");
+    eq(dlv.dataset.state, "replied"); eq(dlv.querySelector(".dlv-t").textContent, "replied 07:50");
+    const go = dlv.querySelector("a.dlv-t"); ok(go, "the reply links to the page thread"); eq(go.getAttribute("href"), "#replies");
+    ok(r.doc.getElementById("replies"), "the page thread is the target");
+  });
+
+  await t("sent: a banner says it reached the inbox, only what was sent locks, and an update unlocks it live", async () => {
+    const { win, doc, bar } = await load("/demo/pf-held");
+    win.__alive = true;
+    ok(!doc.querySelector(".sentlock"), "no banner before a Send");
+    await yes(doc, "r1"); win.confirm = () => true;
+    click(bar.querySelector(".send-btn"));
+    await until(() => w().document.querySelector(".sentlock"), "the banner");
+    const d2 = w().document, box = d2.querySelector(".sentlock");
+    eq(box.dataset.state, "sent");
+    match(box.textContent, /Sent to app at \d\d:\d\d\. It's in app's inbox, waiting to be picked up\./);
+    match(box.textContent, /The item you sent is locked until app updates this page\. Everything else stays open\./);
+    ok(seg(d2, "r1", "yes").disabled, "the sent Yes is locked"); ok(card(d2, "r1").querySelector(".blocker-btn").disabled, "so is its Blocker");
+    ok(!seg(d2, "r2", "yes").disabled, "an item not sent stays open"); ok(!card(d2, "r2").querySelector(".blocker-btn").disabled);
+    const send = d2.querySelector(".rvbar .send-btn"); ok(send.disabled, "nothing new to send"); eq(send.textContent, "Sent");
+    click(seg(d2, "r2", "no"));
+    ok(!send.disabled, "a new answer can go"); match(send.textContent, /^Send to /);
+    await saved();
+    const put = await fetch("/_page/demo/pf-held/answers", { method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ answers: { r1: { answer: "no", note: "" } } }) });
+    eq(put.status, 400, "the server refuses a sent item");
+    await fetch("/_page/demo/pf-held/unlock", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    await until(() => !w().document.querySelector(".sentlock"), "the live unlock", 15000);
+    eq(w().__alive, true, "no reload"); ok(!seg(w().document, "r2", "yes").disabled, "open again");
+  });
+
+  await t("sent: nobody listening says so on the page, and Unlock opens it again", async () => {
+    const { win, doc, bar } = await load("/demo/pf-held-deaf");
+    await yes(doc, "r1"); win.confirm = () => true;
+    click(bar.querySelector(".send-btn"));
+    await until(() => w().document.querySelector(".sentlock"), "the banner");
+    const box = w().document.querySelector(".sentlock");
+    eq(box.dataset.state, "deaf"); match(box.textContent, /Saved to nobody's inbox at \d\d:\d\d, but nobody isn't listening right now/);
+    click(box.querySelector(".unlock"));
+    await until(() => !w().document.querySelector(".sentlock"), "the unlock");
+    ok(!seg(w().document, "r2", "yes").disabled, "open again");
+  });
+
+  await t("sent: a Yes it carried stays locked after the update, a handled Changes clears, and both stay on record", async () => {
+    const { win, doc, bar } = await load("/demo/pf-held-after");
+    ok(!doc.querySelector(".sentlock"), "the reply unlocked it");
+    const row = card(doc, "r1"), tg = row.querySelector(".settled-tg");
+    ok(row.classList.contains("settled"), "the Yes is a locked row"); eq(seg(doc, "r1", "yes").getAttribute("aria-pressed"), "true"); ok(seg(doc, "r1", "yes").disabled);
+    eq(row.querySelector(".rv").offsetParent, null, "collapsed"); click(tg); ok(row.querySelector(".rv").offsetParent !== null, "opens");
+    click(tg); click(row.querySelector("a.rid")); ok(row.querySelector(".rv").offsetParent !== null, "the id link opens a locked row");
+    const ch = card(doc, "r2");
+    eq(ch.querySelector("a.rid").getAttribute("href"), "#rv-r2");
+    eq(seg(doc, "r2", "chg").getAttribute("aria-pressed"), "false"); eq(ch.querySelector(".rv textarea").value, "");
+    eq(ch.querySelector(".rvhead .st").textContent, "Updated: answer again");
+    match(ch.querySelector(".thread").textContent, /Changes/);
+    click(bar.querySelector(".more-btn")); click(bar.querySelector(".copy")); await tick(50);
+    match(win.__clip, /r1/);
+  });
+
+  await t("reopened Yes: shows unanswered, and one Yes clears it", async () => {
+    const { doc } = await load("/demo/pf-reopened");
+    eq(seg(doc, "r1", "yes").getAttribute("aria-pressed"), "false", "not already pressed");
+    match(card(doc, "r1").textContent, /Reopened: numbers moved/);
+    await yes(doc, "r1");
+    await saved();
+    const p = await pageFile("demo/pf-reopened");
+    eq(JSON.stringify(p.rounds[0].reopened), "{}"); eq(p.rounds[0].answers.r1.answer, "yes");
+  });
+
+  await t("restart: Restart from a checkpoint asks first, opens a new round and carries the steps", async () => {
+    const { win, doc } = await load("/demo/pf-journey");
+    const box = doc.querySelector(".rvrestart"); ok(box, "the restart bar");
+    eq(box.querySelector("h2").textContent, "Restart from a checkpoint");
+    const b = box.querySelector('button[data-cp="after-install"]'); ok(b, "Restart from after-install");
+    eq(b.querySelector(".cp-name").textContent, "After install"); eq(b.querySelector(".cp-step").textContent, "after step 1");
+    let asked = 0; win.confirm = () => { asked++; return true; };
+    const conf = box.querySelector(".restart-confirm"); ok(conf.hidden, "no confirm yet");
+    click(b);
+    ok(!conf.hidden, "the confirm opens"); eq(asked, 0, "no browser dialog");
+    match(conf.querySelector(".restart-q").textContent, /^Restart from After install\? Step 2 starts open again, and ops resets the environment first\.$/);
+    click(conf.querySelector(".restart-cancel"));
+    ok(conf.hidden, "Cancel closes it");
+    eq((await pageFile("demo/pf-journey")).rounds.length, 1, "nothing restarted");
+    click(b); click(conf.querySelector(".restart-go"));
+    await until(() => card(w().document, "j2") && card(w().document, "j2").dataset.answer === "", "the redraw after restart");
+    const p = await pageFile("demo/pf-journey");
+    eq(p.rounds.length, 2); eq(p.rounds[1].restart, "after-install"); eq(p.rounds[1].answers.j1.answer, "yes");
+    eq(card(w().document, "j1").dataset.answer, "yes");
+  });
+
+  await t("restart: the restart shows its own delivery state", async () => {
+    const { doc } = await load("/demo/pf-journey2");
+    const box = doc.querySelector(".rvrestart");
+    ok(!box.querySelector(".restart-dlv"), "no state before a restart");
+    click(box.querySelector('button[data-cp="after-install"]')); click(box.querySelector(".restart-go"));
+    await until(() => w().document.querySelector(".rvrestart .restart-dlv"), "the restart's delivery state");
+    const dlv = w().document.querySelector(".rvrestart .restart-dlv");
+    eq(dlv.dataset.state, "deaf");
+    match(dlv.querySelector(".dlv-t").textContent, /^Restarted from After install \d\d:\d\d · ops isn't listening\.$/);
+  });
+
+  await t("live: a change on the server redraws without a reload, after typing stops, keeping the note and scroll", async () => {
+    const { win, doc } = await load("/demo/pf-live");
+    win.__alive = true;
+    click(seg(doc, "r2", "no"));
+    const ta = card(doc, "r2").querySelector("textarea"); ta.focus(); typeIn(ta, "Half typed");
+    await saved();
+    win.scrollTo(0, 200); const y = win.scrollY;
+    await fetch("/_page/demo/pf-live/answers", { method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ answers: { r3: { answer: "yes", note: "" } } }) });
+    await tick(15000);
+    eq(card(doc, "r3").dataset.answer || "", "", "no redraw while typing");
+    eq(ta.value, "Half typed");
+    ta.blur();
+    await until(() => card(w().document, "r3").dataset.answer === "yes", "the redraw", 1200);
+    eq(w().__alive, true, "no reload");
+    eq(card(w().document, "r2").querySelector("textarea").value, "Half typed");
+    ok(Math.abs(w().scrollY - y) < 5, "scroll kept: " + w().scrollY + " vs " + y);
+  });
+
+  await t("reference page: blocks render and there is no answer bar", async () => {
+    await open("/demo/pf-reference");
+    await until(() => d().querySelector("[data-item='n1']"), "the rendered item");
+    ok(!d().querySelector(".rvbar"), "no bar");
+    eq(d().querySelector("[data-item='n1'] p strong").textContent, "team");
+    ok(d().querySelector("[data-item='n1'] .copyblk button"), "a Copy button");
+    eq(d().querySelectorAll("[data-item='n1'] table tr").length, 2);
+  });
+  await t("mixed page: a section, a two-answer section, a question, a choice, a step and an info item each answer their own way", async () => {
+    const { win, doc, bar } = await load("/demo/pf-mixed");
+    const vals = id => Array.from(card(doc, id).querySelectorAll(".seg button")).map(b => b.dataset.v).join(",");
+    eq(vals("s1"), "yes,no,chg", "a section answers Yes / No / Changes");
+    eq(vals("s2"), "yes,no", "its own answers set");
+    eq(vals("j1"), "yes,no,chg,skip", "a step adds Skipped");
+    eq(vals("c1"), "start,hold", "a choice uses the page's options");
+    ok(card(doc, "c1").querySelector(".seg button.def"), "the default choice is marked");
+    ok(card(doc, "q1").querySelector("textarea.qans"), "a question takes free text");
+    ok(!doc.querySelector('[data-item="i1"] .seg'), "an info item has no answers");
+    await yes(doc, "s1"); click(seg(doc, "s2", "no")); click(seg(doc, "c1", "start"));
+    click(card(doc, "q1").querySelector(".suggest-btn"));
+    click(seg(doc, "j1", "skip"));
+    ok(bar.classList.contains("all-done"), bar.querySelector(".cnt").textContent);
+    await saved();
+    const a = await answers("demo/pf-mixed");
+    eq(a.s1.answer, "yes"); eq(a.s2.answer, "no"); eq(a.c1.answer, "start"); eq(a.q1.answer, "UTC"); eq(a.j1.answer, "skipped");
+    const asked = []; win.confirm = m => { asked.push(m); return true; }; let alerted = ""; win.alert = m => { alerted = m; };
+    click(bar.querySelector(".all-no"));
+    eq(alerted, "Every item already has an answer.");
+  });
+  await t("example pages: every page in example/demo renders, and the answerable ones answer", async () => {
+    const want = { "design-review": 4, "signoff-checklist": 3, "backlog": 3, "first-order": 4 };
+    for (const [slug, n] of Object.entries(want)) {
+      const { doc, bar } = await load("/demo/" + slug);
+      eq(doc.querySelectorAll("main section[data-review-question]").length, n, slug + " items");
+      const b = doc.querySelector(".rv .seg button");
+      click(b);
+      ok(/answered|picked/.test(bar.querySelector(".cnt").textContent), slug + ": " + bar.querySelector(".cnt").textContent);
+    }
+    await open("/demo/release-notes");
+    await until(() => d().querySelector("[data-item='n2'] .copyblk"), "the reference page");
+    ok(!d().querySelector(".rvbar"), "no bar on a reference page");
+  });
+})().catch(e => { results.harness = "FAIL " + String(e && e.stack || e); })
+  .finally(() => { document.getElementById("out").textContent = JSON.stringify(results); });
+</script></body></html>

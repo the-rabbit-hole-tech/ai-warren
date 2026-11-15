@@ -1,0 +1,43 @@
+# GoReleaser builds the warren binary for the GitHub Release (darwin and linux, amd64 and
+# arm64). .github/workflows/release.yaml runs it when a v* tag is pushed; the release it fills
+# stays a draft until it is published by hand.
+version: 2
+
+project_name: warren
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: warren
+    main: ./cmd/warren
+    binary: warren
+    env:
+      - CGO_ENABLED=0
+      - GOWORK=off
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w
+      - -X github.com/Bugs5382/go-buildinfo.Version={{ .Version }}
+      - -X github.com/Bugs5382/go-buildinfo.Commit={{ .Commit }}
+
+archives:
+  - id: warren
+    ids: [warren]
+    formats: [tar.gz]
+    name_template: "warren_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files: [LICENSE, NOTICE]
+
+checksum:
+  name_template: "warren_{{ .Version }}_checksums.txt"
+
+changelog:
+  disable: true
+
+release:
+  draft: true
+  use_existing_draft: true
+  mode: keep-existing

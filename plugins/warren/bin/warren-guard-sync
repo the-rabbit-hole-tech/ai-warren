@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# Copies the plugin's git hooks to a stable path, so the guard never points into the plugin
+# cache (whose path changes on every plugin update), then checks the global hooks link.
+#
+#   warren-guard-sync [--quiet]
+#
+# Source:  ${CLAUDE_PLUGIN_ROOT}/git-hooks (or the git-hooks folder next to this script's bin/)
+# Target:  ${WARREN_GUARD_DIR:-~/.config/warren/git-hooks}, with every hook-name link made to
+#          _dispatch, a VERSION file holding the content hash of the source and a
+#          PLUGIN_VERSION file holding the version of the plugin that synced it.
+# Order:   the sync never downgrades. A session still running an older plugin (its version is
+#          below PLUGIN_VERSION) leaves the copy alone and prints one line saying so, and so does
+#          a plugin whose version can't be read while a version is recorded. The same version
+#          with different content still syncs, so a plugin under development keeps working.
+# Link:    ${WARREN_HOOKS_LINK:-~/.config/git/hooks} must be a symlink to the target, and the
+#          global core.hooksPath must name that link. This script never changes either one; it
+#          prints the fix instead.
+#
+# Exit codes: 0 in sync and linked, 3 re-synced and linked, 4 skipped because this plugin is
+# older than the copy's and linked, 1 the link or core.hooksPath is wrong (the copy is still
+# brought up to date unless that would downgrade it), 2 the source is missing.
+set -euo pipefail
+
+HOOKS=(applypatch-msg commit-msg post-applypatch post-checkout post-commit post-merge
+       post-rewrite pre-applypatch pre-auto-gc pre-commit pre-merge-commit pre-push pre-rebase
+       prepare-commit-msg)
+
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+root=${CLAUDE_PLUGIN_ROOT:-$(dirname "$here")}
+SRC="$root/git-hooks"
+DEST=${WARREN_GUARD_DIR:-$HOME/.config/warren/git-hooks}
+LINK=${WARREN_HOOKS_LINK:-$HOME/.config/git/hooks}
+quiet=0; [ "${1:-}" = "--quiet" ] && quiet=1
+
+say() { [ "$quiet" = 1 ] || echo "warren-guard-sync: $*"; }
+die() { echo "warren-guard-sync: $*" >&2; exit "${2:-1}"; }
+
+[ -x "$SRC/_dispatch" ] || die "source $SRC/_dispatch is missing or not executable" 2
+
+# Content hash of every file the guard runs, in a fixed order. Term lists and caches never
+# live in the source (see git-hooks/.gitignore), so they never enter the hash.
+src_hash() {
+  (cd "$SRC" && find . -type f ! -name '*-terms.txt' ! -path './scrub/cache/*' ! -path '*/__pycache__/*' \
+     ! -name '.gitignore' | LC_ALL=C sort | while IFS= read -r f; do
+       printf '%s\n' "$f"; cat "$f"
+     done) | { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi; } | cut -d' ' -f1
+}
+
+# The plugin's own version, from its manifest; empty when it can't be read.
+plugin_version() {
+  sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+    "$root/.claude-plugin/plugin.json" 2>/dev/null | head -1
+}
+
+# older A B: true when version A is below version B, comparing the numeric X.Y.Z parts (a
+# pre-release or build suffix is ignored, so it counts as its release).
+older() {
+  local a=${1%%[-+]*} b=${2%%[-+]*} i x y
+  local -a av bv
+  IFS=. read -r -a av <<<"$a"; IFS=. read -r -a bv <<<"$b"
+  for i in 0 1 2; do
+    x=${av[$i]:-0}; y=${bv[$i]:-0}
+    [[ $x =~ ^[0-9]+$ ]] || x=0; [[ $y =~ ^[0-9]+$ ]] || y=0
+    (( 10#$x < 10#$y )) && return 0
+    (( 10#$x > 10#$y )) && return 1
+  done
+  return 1
+}
+
+want=$(src_hash)
+have=$(cat "$DEST/VERSION" 2>/dev/null || true)
+mine=$(plugin_version)
+installed=$(cat "$DEST/PLUGIN_VERSION" 2>/dev/null || true)
+status=0
+downgrade=0
+if [ -n "$installed" ] && { [ -z "$mine" ] || older "$mine" "$installed"; }; then downgrade=1; fi
+if [ "$downgrade" = 1 ] && [ -x "$DEST/_dispatch" ]; then
+  if [ "$want" != "$have" ]; then
+    if [ -n "$mine" ]; then why="this plugin $mine is older than the installed $installed"
+    else why="this plugin's version can't be read and the installed one is $installed"; fi
+    echo "warren-guard-sync: kept the installed guard: $why; restart this session to load the current plugin." >&2
+    status=4
+  fi
+elif [ "$want" != "$have" ] || [ ! -x "$DEST/_dispatch" ]; then
+  mkdir -p "$DEST"
+  # Copy in place (no delete): the target only ever holds what this script put there.
+  (cd "$SRC" && find . -type d ! -path './scrub/cache*' ! -path '*/__pycache__*') | while IFS= read -r d; do
+    mkdir -p "$DEST/$d"
+  done
+  (cd "$SRC" && find . -type f ! -name '*-terms.txt' ! -path './scrub/cache/*' ! -path '*/__pycache__/*' ! -name '.gitignore') |
+    while IFS= read -r f; do cp -p "$SRC/$f" "$DEST/$f"; done
+  chmod 755 "$DEST/_dispatch"
+  for h in "${HOOKS[@]}"; do
+    if [ -L "$DEST/$h" ] && [ "$(readlink "$DEST/$h")" = _dispatch ]; then continue; fi
+    [ -e "$DEST/$h" ] && [ ! -L "$DEST/$h" ] && die "$DEST/$h is a file, not the _dispatch link; move it aside by hand"
+    ln -sfn _dispatch "$DEST/$h"
+  done
+  printf '%s\n' "$want" > "$DEST/VERSION.tmp" && mv "$DEST/VERSION.tmp" "$DEST/VERSION"
+  if [ -n "$mine" ]; then
+    printf '%s\n' "$mine" > "$DEST/PLUGIN_VERSION.tmp" && mv "$DEST/PLUGIN_VERSION.tmp" "$DEST/PLUGIN_VERSION"
+  fi
+  say "synced the guard into $DEST ($want)"
+  status=3
+fi
+
+dest_real=$(cd "$DEST" && pwd -P)
+link_ok=0
+if [ -L "$LINK" ]; then
+  target=$(readlink "$LINK")
+  case "$target" in /*) ;; *) target="$(dirname "$LINK")/$target" ;; esac
+  [ -d "$target" ] && [ "$(cd "$target" && pwd -P)" = "$dest_real" ] && link_ok=1
+fi
+if [ "$link_ok" != 1 ]; then
+  echo "warren-guard-sync: $LINK does not link to $DEST, so git isn't running this guard." >&2
+  echo "  fix: move $LINK aside, then ln -s $DEST $LINK (warren init does this on a new machine)" >&2
+  exit 1
+fi
+
+hp=$(git config --global --get core.hooksPath 2>/dev/null || true)
+hp=${hp/#\~/$HOME}
+if [ "${hp%/}" != "${LINK%/}" ]; then
+  echo "warren-guard-sync: the global core.hooksPath is '${hp:-unset}', expected $LINK." >&2
+  echo "  fix: warren init sets it on a new machine; on a machine that already has one, change it by hand." >&2
+  exit 1
+fi
+
+[ "$status" = 0 ] && say "in sync ($want)"
+exit "$status"

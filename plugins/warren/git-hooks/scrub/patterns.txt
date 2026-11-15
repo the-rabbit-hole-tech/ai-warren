@@ -1,0 +1,25 @@
+# Global scrub patterns, checked on every push from this machine (any repo, any remote).
+# Format: <kind> <name> <python regex>
+#   secret       over every added line, commit message and tag message. Matched case-sensitively.
+#                Reported masked (first 4 chars and the length), never in full.
+#                A line in a file may carry `scrub:allow=secret` for a known fake (test fixture);
+#                a whole path can be allowed per clone with guard.scrubAllowPath (README.md).
+#   attribution  over commit and tag messages only (the global "no attribution" rule).
+#                Matched case-insensitively, multi-line (^ is the start of a message line).
+# Identifier patterns (private IPs, emails, home paths, host names) are not here: they come
+# from the org scrub.py and apply to org remotes (orgs.conf), as your org's rules say.
+
+secret github-token        \b(?:gh[pousr]_[A-Za-z0-9]{36,255}|github_pat_[A-Za-z0-9_]{22,255})\b
+secret gitlab-token        \bglpat-[A-Za-z0-9_-]{20,}
+secret anthropic-key       \bsk-ant-[A-Za-z0-9_-]{20,}
+secret openai-key          \bsk-(?:proj-|svcacct-|admin-)?(?=[A-Za-z0-9_-]*[0-9])(?=[A-Za-z0-9_-]*[A-Z])[A-Za-z0-9_-]{32,}
+secret aws-access-key      \b(?:AKIA|ASIA)[A-Z0-9]{16}\b
+secret google-api-key      \bAIza[0-9A-Za-z_-]{35}\b
+secret slack-token         \bxox[abposr]-[A-Za-z0-9-]{10,}
+secret npm-token           \bnpm_[A-Za-z0-9]{36}\b
+secret stripe-live-key     \b[sr]k_live_[A-Za-z0-9]{20,}
+secret private-key-block   -----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----
+
+attribution coauthor-trailer ^\s*co-author[e]d-by:
+attribution generated-with generated (?:with|by) \[?claude
+attribution claude-session ^\s*claude-session:

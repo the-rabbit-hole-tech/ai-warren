@@ -1,0 +1,88 @@
+{
+  "name": "__REPO_NAME__",
+  "version": "0.0.0",
+  "description": "__DESCRIPTION__",
+  "author": "__AUTHOR__",
+  "license": "__LICENSE__",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./style.css": "./dist/index.css"
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": [
+    "**/*.css"
+  ],
+  "config": {
+    "packMaxUnpackedBytes": 250000,
+    "packMaxGrowthPercent": 25
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/__OWNER__/__REPO_NAME__.git"
+  },
+  "homepage": "https://github.com/__OWNER__/__REPO_NAME__#readme",
+  "bugs": {
+    "url": "https://github.com/__OWNER__/__REPO_NAME__/issues"
+  },
+  "scripts": {
+    "dev": "vite build --watch",
+    "build": "tsc --noEmit && vite build",
+    "check:pack": "node tools/checkPack.mjs",
+    "check:pack:growth": "node tools/checkPackGrowth.mjs",
+    "check:install": "node tools/checkInstall.mjs",
+    "clean": "rm -rf dist docs coverage storybook-static",
+    "storybook": "storybook dev -p 6006",
+    "build-storybook": "storybook build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "docs": "typedoc"
+  },
+  "peerDependencies": {
+    "react": "^18 || ^19",
+    "react-dom": "^18 || ^19"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "@storybook/addon-a11y": "^9.0.0",
+    "@storybook/addon-docs": "^9.0.0",
+    "@storybook/react-vite": "^9.0.0",
+    "@testing-library/dom": "^10.4.0",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.1.0",
+    "@testing-library/user-event": "^14.5.2",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.1.0",
+    "@vitest/coverage-v8": "^4.1.0",
+    "eslint": "^9.39.4",
+    "eslint-plugin-storybook": "^9.0.0",
+    "jsdom": "^25.0.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "storybook": "^9.0.0",
+    "typedoc": "^0.28.0",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.18.0",
+    "vite": "^7.0.0",
+    "vite-plugin-dts": "^5.1.1",
+    "vite-plugin-lib-inject-css": "^2.2.0",
+    "vitest": "^4.1.0"
+  }
+}

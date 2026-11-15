@@ -1,0 +1,12 @@
+{
+  "description": "handoff: flag an unread hand-off Send or a lost listener",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/inbox-check.sh" }
+        ]
+      }
+    ]
+  }
+}

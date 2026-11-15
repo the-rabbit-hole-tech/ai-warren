@@ -1,0 +1,159 @@
+# Page API: page files over HTTP, and the inbox
+
+How the browser reads and answers a page file, and how a Send or a Blocker reaches an agent. The app and
+`review.js` already use all of this; agents write page files with `page.py` (see `PAGE-FILE.md`) and read
+their inbox from disk. HTML pages that aren't converted yet keep using `/_save/` (`SAVE-API.md`).
+
+## Before you start
+
+- A running site, and a page file to try it on. From the site folder:
+
+  ```bash
+  printf '%s' '{"schema": "handoff.page/v1", "kind": "review", "title": "Try it", "items": [{"id": "s1", "title": "First"}, {"id": "s2", "title": "Second"}]}' > try.json
+  python3 _site/page.py new demo/try --from try.json
+  ```
+
+- The examples use `http://127.0.0.1:8000`; use the host and port from `site.json`.
+
+## Endpoints
+
+`<page>` is `<folder>/<slug>`, or deeper (`demo/journeys/first-order`).
+
+| Method | Path | Body | Result |
+|---|---|---|---|
+| `GET` | `/<page>` | none | the page, drawn by the app in `_site/app.html`; a converted page's old `.html` URL answers `301` to it |
+| `GET` | `/_page/<page>` | none | `200` with the page as JSON (below) and an `ETag`; `304` when `If-None-Match` matches |
+| `PUT` | `/_page/<page>/answers` | `{"base": rev, "answers": {id: {"answer": "...", "note": "...", "locked": true}}}` | `200` with `{"rev": n}`; `"skipped": true` or `false` on a question skips or un-skips it, only on a page with `"skippable": true` (`400` otherwise, and `400` "un-skip to change" for new text while skipped); `"locked": true` confirms a Yes and locks it (`400` on any other answer); `409` when the item is a confirmed Yes and the answer would change (its note may still change) |
+| `POST` | `/_page/<page>/reopen` | `{"item": id, "reason": "..."}` | `200` with `{"rev": n}`: takes the lock off a confirmed Yes; `400` without a reason or when the item isn't locked |
+| `POST` | `/_page/<page>/round` | `{"results": "..."}` | `200` with `{"round": n}`: Save round now; `n` is the round just opened |
+| `POST` | `/_page/<page>/unlock` | `{}` | `200` with `{"rev": n}`: takes the lock off a sent page without waiting for the agent |
+| `POST` | `/_page/<page>/restart` | `{"checkpoint": "...", "results": "..."}` | `200` with `{"round": n, ...}` and a `restart` submission |
+| `POST` | `/_page/<page>/send` | `{"kind": "send" or "blocker" or "drop", "items": [ids], "results": "..."}` | `200` with `{"n", "file", "to", "listening"}`; `drop` takes exactly one item and needs `"droppable": true` on the page (`400` otherwise, or when a drop for it is already waiting) |
+| `GET` | `/_index/` and `/_index/<folder>` | none | the index cards as JSON, with an `ETag` |
+
+- Request bodies are JSON with `Content-Type: application/json`, at most 256 KB. Wrong type: `415`. Not
+  JSON: `400`. Too large: `413`. No such page: `404`. Unknown action: `405`.
+- A write the page file refuses answers `400` with `{"errors": ["s1: Changes needs a note"]}`, each error
+  naming the item.
+- Every response carries `Cache-Control: no-store`. `_saved/` and `_inbox/` are never served.
+
+### Reading a page
+
+```bash
+curl -s http://127.0.0.1:8000/_page/demo/try | python3 -m json.tool | head -20
+```
+
+The body is `{"page", "states", "summary", "route", "listening", "diffs"}`:
+
+- `page`: the page file as stored, including `rev`, `rounds`, `thread` and `submissions`.
+- `states`: per answerable item, `{"answer", "hidden", "reopened", "round"}`. `hidden` (drawn as a locked row) is a Yes from an earlier
+  round; `reopened` is the reason it came back, or `null`. `"locked": true` is added on a Yes the reviewer confirmed in the open round. `"fixing": "<text>"` is added on an item marked fix in progress. `"skipped": true` is added on a skipped question (its `answer` is the text it kept). `"dropping": true` is added while a Drop the reviewer asked for has no reply under the item.
+- `summary`: the bar's counts, `open`, `blocked`, `counted`, `yes`, `reopened`, `approved` (plus `skipped`, only when a question is skipped, and `fixing`, only when an item is marked fix in progress; it is counted in none of open, blocked or yes), and a backlog's
+  `tally`.
+- `route`: where Send goes, `{"to": agent, "mode": "send" | "copy" | "both"}`. It's the page's own `route`, else
+  the folder's in `site.json` `routes`, else `operator`.
+- `listening`: whether the route's agent is waiting on its inbox right now.
+- `diffs`: word-diff markup for diff items (`"<id>"`) and diff blocks (`"<id>/body/<n>"`), drawn by `diff.py`.
+
+The app polls this every 10 seconds with `If-None-Match` and redraws only on a new version.
+
+### Answering
+
+```bash
+curl -s -X PUT -H 'Content-Type: application/json' \
+  -d '{"base": 1, "answers": {"s1": {"answer": "yes", "note": ""}, "s2": {"answer": "changes", "note": "Name it"}}}' \
+  http://127.0.0.1:8000/_page/demo/try/answers
+```
+
+Send only the items this tab changed. Each one is merged into the open round under the page lock, stamped with
+`by` (the owner in `site.json`) and `at`, and its earlier answer moves into `was`. A stale `base` is fine: the
+merge is item by item, so two tabs never undo each other. Answers are `yes`, `no`, `changes` and `skipped` as
+the item allows, a choice's value, or free text for a question; `""` clears.
+
+### Sending
+
+```bash
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"kind": "send", "results": "Review: Try it (/demo/try)"}' \
+  http://127.0.0.1:8000/_page/demo/try/send
+ls _inbox/ops/
+```
+
+A Send records the submission on the page, then writes one file to the route's inbox, atomically. Only once the
+file is there do its items lock: the open round's `held` lists the Sends waiting (`awaiting` is the latest), and
+`PUT /answers` answers `400` for those items, and only those, until the agent's next `page.py set` or `reply`, or an unlock. A file that can't be written answers `500` and marks
+the submission `failed`, with nothing locked. A Blocker never locks. On a round with phases, `"phase": "A"` sends just that phase, and a blocked phase answers `400`. `"scope": "item"` with one id in `items` sends that item on its own; it answers `400` when the item has no new answer, is already sent, or is blocked. Its hold lifts only on a reply under that item, a change to it, or an unlock. `items`
+defaults to every item answered in the open round that isn't held or settled; a blocker sends exactly one. The answers and notes come
+from the page file, not from the request. A route whose `mode` is `copy` answers `409`: that page copies its
+results instead.
+
+The bar then shows where the latest Send or Blocker stands, from `submissions`, `listening` and the thread:
+sent, picked up once the agent moves the file to `taken/`, the agent's newest reply after it, or, while nobody is
+listening, "isn't listening." with a Copy results button.
+
+## The inbox
+
+```text
+_inbox/<agent>/<prio>-<UTC stamp>-<folder>-<slug>-<n>.json      prio: 0 = blocker or restart, 5 = send or drop
+```
+
+File names sort blockers first. Each file is one submission:
+
+```json
+{"schema": "handoff.submission/v1", "n": 1, "kind": "send", "page": "demo/try",
+ "url": "http://127.0.0.1:8000/demo/try", "title": "Try it", "build": null, "round": 1, "rev": 3,
+ "at": "2026-10-26T08:21:10-04:00",
+ "items": [{"id": "s1", "n": 1, "answer": "yes", "note": "", "blocker": false},
+           {"id": "s2", "n": 2, "answer": "changes", "note": "Name it", "blocker": false}],
+ "results": "Review: Try it (/demo/try)"}
+```
+
+- **Waiting:** `page.py wait <agent>` blocks until a file is there and prints the waiting files, blockers first.
+  While it runs it keeps its pid in `_inbox/<agent>/.listening`; the page shows the agent as listening only
+  while that process is alive.
+- **Taking:** move a file to `_inbox/<agent>/taken/`. The next read of the page records it as picked up, and
+  the bar says so.
+- **Answering:** reply on the page with `page.py reply <page> <id> --from <agent> "..."`, with `--action` for
+  `filed`, `fixed`, `reopen`, `unblock`, `wontfix` or `info`. That reply is what the owner sees.
+- **Missed wake-ups:** nothing is lost, because the files stay until they're taken. `page.py hook <agent>`
+  prints one line whenever files are waiting or nothing is listening.
+
+## Pausing the listeners
+
+The home page has a **Listeners: On / Paused** switch, and **Pause until HH:MM** (the next such time in the site's
+timezone; it ends by itself). The state is stored on the server, in `_saved/_listeners.json`, so every tab, agent and hook
+sees it. `page.py listeners on|pause [--until HH:MM]|status` is the same switch from a terminal.
+
+The switch's two labels, **On** and **Paused**, never change; the pressed one is the state, and nothing extra is written while
+listeners are on. While paused, a short note under the labels says "Sends are saved and delivered when you turn listeners on."
+(for a timed pause: "Back on at 06:00. Sends are saved ..."); it is a note of its own and never replaces a label.
+
+While paused:
+
+- `page.py wait` and `page.py listen` **deliver nothing and keep sleeping**. A paused `wait` does not exit, so the agent's
+  background job never completes and nothing wakes it (that is the point: no tokens are spent). A `--timeout` still ends it
+  with exit code 3. `.listening` stays in place, so the page still shows an agent listening.
+- `page.py hook` prints **nothing**: no "files waiting" and no "nothing is listening" line.
+- A Send or Blocker is **still saved** to `_inbox/<agent>/`; nothing is lost. The response carries `"paused": true`, and the
+  page's bar says "Listeners paused: your Send is saved and delivered when you turn listeners on".
+- Turning listeners On (or the timed pause running out) lets the waiting `wait` or `listen` deliver what queued, blockers
+  first, within about two seconds.
+
+An agent should do nothing special while paused: leave `page.py wait` running as usual, do not poll the inbox, do not restart
+the wait, and do not read the inbox files directly. If a hook or the operator says listeners are paused, wait for them to be
+turned on.
+
+| Method | Path | Body | Result |
+|---|---|---|---|
+| `GET` | `/_listeners` | none | `200` with `{"paused", "until", "at", "by"}`; `until` is an ISO time or `null`; a pause whose time has passed reads as not paused |
+| `POST` | `/_listeners` | `{"paused": true, "until": "06:00"}` or `{"paused": false}` | `200` with the new state; `400` for a bad time or a non-boolean `paused` |
+
+`GET /_page/<page>` carries the same state as `listeners`, and a `send` answers with `"paused": true|false`.
+
+## The index
+
+`GET /_index/<folder>` returns `{"folder", "name", "blurb", "pages"}`, and `GET /_index/` returns
+`{"title", "folders": [...]}` with the same cards per folder. A card has `href`, `title`, `note`, `state`,
+`chips`, `open`, `tally`, `priority`, `mtime`, `first` and, for a page file, `kind`. Page files and the HTML
+pages in `_status.json` are merged in the index's order. The folder and root index pages themselves
+(`/<folder>/`, `/`) are built from the same cards on request whenever page files are involved.

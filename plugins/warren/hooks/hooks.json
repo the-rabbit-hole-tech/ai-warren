@@ -1,0 +1,47 @@
+{
+  "description": "warren: the always-on text, the git guard sync and the command guards",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/inject-warren.sh" },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/repo-ready.sh" },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/guard-sync.sh" },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/hookspath-check.sh" }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/marketplace-release-guard.sh" },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/block-ai-tells.sh" },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/validate-conventional-commit.sh" },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/block-hook-bypass.sh" },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/check-push-readiness.sh" },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/tmux-last-window-guard.sh" },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/merge-loop-warn.sh" },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/to-be-deleted-guard.sh" },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/gh-meta-guard.sh" },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/merge-yes-gate.sh" },
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/skill-gate.sh" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/merge-yes-record.sh" }
+        ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/skill-record.sh" }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,32 @@
+name: Container Init
+# Pull requests only, and not while the PR is a draft. Builds the linux warren binary and runs
+# `warren init` plus `warren doctor` in a clean Debian container (test/container/run.sh), with
+# the plugin tree as a local marketplace. It needs network for the claude and tmux installs.
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened, ready_for_review]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  container-init:
+    name: 📦 Container Init
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          cache: false
+          go-version-file: go.mod
+      - name: Run warren init in a clean container
+        env:
+          GOWORK: "off"
+        run: bash test/container/run.sh

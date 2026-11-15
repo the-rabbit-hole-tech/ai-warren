@@ -1,0 +1,7 @@
+# golic ships no built-in Swift rules; define the block-comment style here so the
+# licence header lands on Swift sources. Remove once golic bundles these rules upstream.
+golic:
+  rules:
+    .swift:
+      prefix: "/*"
+      suffix: "*/"

@@ -1,0 +1,13 @@
+# The org's .github repo provides these for every Example-Org repo.
+.github/CODE_OF_CONDUCT.md
+.github/CONTRIBUTING.md
+.github/SECURITY.md
+.github/SUPPORT.md
+.github/PULL_REQUEST_TEMPLATE.md
+.github/ISSUE_TEMPLATE
+.github/DISCUSSION_TEMPLATE
+# No sponsor button for the org.
+.github/FUNDING.yml
+# The hub's gitleaks config allowlists README.md; the org scrub and the PR
+# Checks step run gitleaks with no path allowlist instead.
+.gitleaks.toml

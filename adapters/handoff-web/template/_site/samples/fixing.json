@@ -1,0 +1,17 @@
+{
+  "definition": {
+    "schema": "handoff.page/v1",
+    "kind": "review",
+    "title": "Sample: a fix in progress",
+    "summary": "One item has a fix under way, so it takes no answer until the fix is cleared.",
+    "items": [
+      {"id": "f1", "title": "The export button saves a file", "body": [{"p": "Press Export and check a file is saved."}]},
+      {"id": "f2", "title": "The export file opens", "body": [{"p": "Open the file the button saved."}]},
+      {"id": "f3", "title": "The report totals match", "body": [{"p": "Compare the totals with the screen."}]}
+    ]
+  },
+  "steps": [
+    {"answers": {"f1": {"answer": "yes", "note": ""}}, "at": "2026-10-26T08:00:00-04:00"},
+    {"fixing": {"id": "f2", "text": "bug log 246"}, "at": "2026-10-26T08:05:00-04:00"}
+  ]
+}

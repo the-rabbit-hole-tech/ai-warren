@@ -1,0 +1,9 @@
+{
+  "name": "scaffold",
+  "version": "1.0.0",
+  "description": "Repo governance and scaffolding: the shared governance and ecosystem templates, warren-new-repo and the apply scripts, adopting a repo, licences and credit, reuse, helper repos.",
+  "author": {
+    "name": "The ai-warren Authors"
+  },
+  "license": "Apache-2.0"
+}

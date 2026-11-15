@@ -1,0 +1,79 @@
+version: '3'
+vars:
+  ARTIFACT_NAME: ai-warren
+  TESTPARALLELISM: 4
+  GOLIC_VERSION: v0.3.0
+  GOLANGCI_VERSION: v2.12.2
+  COMMON_LIC: "2026 The ai-warren Authors"
+  TEMPLATE_LIC: "apache2"
+tasks:
+  default:
+    cmds:
+      - task: lint
+  fmt:
+    desc: Format Go sources
+    cmds:
+      - gofmt -w .
+      - goimports -w ./
+  build:
+    desc: Build all packages
+    cmds:
+      - go build ./...
+  build:warren:
+    desc: Build the warren binary into bin/
+    env:
+      GOWORK: "off"
+      CGO_ENABLED: "0"
+    cmds:
+      - go build -o bin/warren ./cmd/warren
+  release:snapshot:
+    desc: Dry-run the release build (four archives and the checksums file into dist/); publishes nothing
+    env:
+      GOWORK: "off"
+    cmds:
+      - go run github.com/goreleaser/goreleaser/v2@v2.11.2 release --snapshot --clean --skip=publish
+  run:
+    desc: Run warren against THIS machine with trace logging (task run -- doctor)
+    env:
+      GOWORK: "off"
+      LOG_LEVEL: trace
+      LOG_FORMAT: console
+    cmds:
+      - go run ./cmd/warren {{.CLI_ARGS}}
+  test:container:
+    desc: Run warren init in a clean Debian container (needs Docker and the plugin tree)
+    cmds:
+      - bash test/container/run.sh {{.CLI_ARGS}}
+  test:
+    desc: Run tests
+    cmds:
+      - go test -parallel {{.TESTPARALLELISM}} ./...
+  test-cover:
+    desc: Run tests with coverage reporting
+    cmds:
+      - go test ./... -cover
+  lint:
+    desc: Run all linters
+    deps: [test]
+    cmds:
+      - |
+        unformatted="$(gofmt -l .)"
+        if [ -n "$unformatted" ]; then echo "gofmt needed on:"; echo "$unformatted"; exit 1; fi
+      - golangci-lint run
+      - yamllint .
+  lint-init:
+    desc: Install lint dependencies (golangci-lint is built with the local Go toolchain)
+    cmds:
+      - brew install gitleaks yamllint
+      - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_VERSION}}
+      - go install golang.org/x/tools/cmd/goimports@latest
+  license:
+    desc: Verify every source file carries the Apache-2.0 license header (CI; never writes).
+    cmds:
+      - go install github.com/Bugs5382/golic/cmd/golic@{{.GOLIC_VERSION}}
+      - golic inject -t {{.TEMPLATE_LIC}} -c "{{.COMMON_LIC}}" --dry -x
+  license:fix:
+    desc: Inject the MIT header into any source file missing it.
+    cmds:
+      - go install github.com/Bugs5382/golic/cmd/golic@{{.GOLIC_VERSION}}
+      - golic inject -t {{.TEMPLATE_LIC}} -c "{{.COMMON_LIC}}"

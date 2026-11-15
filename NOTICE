@@ -1,0 +1,13 @@
+ai-warren
+Copyright 2026 The ai-warren Authors
+
+This product includes software developed by the ai-warren Authors.
+Original author: Bugs5382. See the AUTHORS file.
+
+adapters/handoff-web is derived from claude-handoff-web
+(https://github.com/Bugs5382/claude-handoff-web), which is distributed under the MIT License:
+
+  Copyright (c) 2026 Shane
+
+The full MIT licence text is in adapters/handoff-web/LICENSE. That directory stays under the MIT
+License; the rest of this repository is Apache-2.0.
