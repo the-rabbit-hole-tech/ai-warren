@@ -19,8 +19,7 @@ for.
 - **Releases:** the site has no tag of its own. A `vX.Y.Z` tag makes `.github/workflows/release.yaml` build the CLI
   archives and, in a second job, pack `adapters/handoff-web/scripts/build-release.sh`'s tarball and checksum onto the
   same draft release; the maintainer publishes it by hand. `RELEASING.md` has the steps and how to update a running site
-  from the tarball. The repository is private, so a download needs a token (`gh release download`); a public install
-  path waits for the repository to go public.
+  from the tarball. The repository is public, so a download needs no token (`gh release download`).
 - **Pending:** claude-handoff-web PR 146 (inline icon copy button, closes issue 145) is being
-  finished in the old repo. After it merges there it can be carried over with
+  finished in claude-handoff-web. After it merges there it can be carried over with
   `git format-patch` and `git am --directory=adapters/handoff-web`.
