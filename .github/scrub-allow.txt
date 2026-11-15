@@ -1,0 +1,2 @@
+ai-tell Claude%20Code README.md  # this marketplace is for that coding CLI, so the docs name it
+ai-tell Claude%20Code RELEASING.md  # same: the release guide names the product
