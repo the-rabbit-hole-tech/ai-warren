@@ -55,4 +55,4 @@ jobs:
           # Build from source with the job's Go, so a newer go.mod never
           # outruns the toolchain the prebuilt binary was compiled with.
           install-mode: goinstall
-          args: --timeout=3m
+          args: --timeout=3m --allow-parallel-runners
