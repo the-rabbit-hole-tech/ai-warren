@@ -1,4 +1,5 @@
 governance/ and ecosystems/ were ported from the governance template repo at commit 3b891d0
 and made generic: owner, org and host values moved to each owner's scaffold/ folder.
-The template's repo-local Claude hooks, settings template and init script were left out; the warren
+The template's repo-local Claude hooks, settings template and init script were left out, except .claude/hooks/lib.sh
+and forbidden-text.txt, which the shared PR Checks workflow sources; the warren
 plugin's guards and /warren:warren-repo cover them, and lib/scaffold.sh fills the tokens.
