@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Add an ecosystem's base topics, and the owner's own topics, to a repo. Topics are additive:
+# domain topics already on the repo are kept. Labels are a different thing (one set everywhere).
+#
+#   warren-apply-topics [--print] [--scaffold-dir <dir>] <owner/repo> <ecosystem> [variant]
+#
+# With a variant, templates/ecosystems/<eco>/topics.<variant> is added on top of the base set.
+# The owner's scaffold/topics (see README.md) is added to every repo of that owner.
+# --print lists the topics, one a line, and calls no API.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+SCAFFOLD_ROOT="$(dirname "$here")"
+# shellcheck source=../lib/scaffold.sh
+source "$SCAFFOLD_ROOT/lib/scaffold.sh"
+
+PRINT=0; ARGS=()
+SCAFFOLD_DIR_FLAG="${SCAFFOLD_DIR_FLAG:-}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --print) PRINT=1 ;;
+    --scaffold-dir) SCAFFOLD_DIR_FLAG="${2:?--scaffold-dir needs a folder}"; shift ;;
+    -*) echo "unknown option: $1" >&2; exit 2 ;;
+    *) ARGS+=("$1") ;;
+  esac
+  shift
+done
+REPO="${ARGS[0]:-}"; ECO="${ARGS[1]:-}"; VARIANT="${ARGS[2]:-}"
+[ -n "$REPO" ] && [ -n "$ECO" ] || { echo "usage: warren-apply-topics [--print] <owner/repo> <ecosystem> [variant]" >&2; exit 2; }
+export SCAFFOLD_DIR_FLAG
+
+TOPICS_FILE="$ECOS/$ECO/topics"
+[ -f "$TOPICS_FILE" ] || { echo "no topics file for ecosystem: $ECO" >&2; exit 1; }
+org_use "${REPO%%/*}"
+list="$( { cat "$TOPICS_FILE"; [ -z "$VARIANT" ] || [ ! -f "$TOPICS_FILE.$VARIANT" ] || cat "$TOPICS_FILE.$VARIANT"; org_topics; } \
+  | grep -vE '^[[:space:]]*(#|$)' | awk '!seen[$0]++')"
+if [ "$PRINT" -eq 1 ]; then printf '%s\n' "$list"; exit 0; fi
+[ -n "$list" ] || { echo "no topics defined for $ECO"; exit 0; }
+TOPICS="$(printf '%s\n' "$list" | paste -sd, -)"
+gh repo edit "$REPO" --add-topic "$TOPICS"
+echo "applied topics to $REPO: $TOPICS"

@@ -1,0 +1,7 @@
+{
+  "name": "operator",
+  "version": "1.5.1",
+  "description": "The operator rules as per-step skills (waves, briefs, lanes, sessions, questions, owner away, bug reports, infra devices) and the tmux scripts that keep the operator and coding sessions alive.",
+  "author": { "name": "The ai-warren Authors" },
+  "license": "Apache-2.0"
+}

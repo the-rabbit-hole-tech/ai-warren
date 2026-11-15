@@ -1,0 +1,47 @@
+{
+  "name": "ai-warren",
+  "owner": { "name": "The ai-warren Authors" },
+  "metadata": { "version": "1.10.0", "description": "the rabbit hole's agent factory: plugins and skills loaded per step" },
+  "plugins": [
+    {
+      "name": "warren",
+      "source": "./plugins/warren",
+      "description": "Always on: the short rule text and the hard stops every session needs."
+    },
+    {
+      "name": "github",
+      "source": "./plugins/github",
+      "description": "The GitHub flow: issues, branches, PRs, approvals, CI, cleanup, metadata, profiles and releases."
+    },
+    {
+      "name": "coding",
+      "source": "./plugins/coding",
+      "description": "How code is written: test first, surgical changes, docs, logging, health, READMEs, packages and the language rules."
+    },
+    {
+      "name": "operator",
+      "source": "./plugins/operator",
+      "description": "For the operator session and lead windows: lanes, waves, status, questions, tmux sessions and device work."
+    },
+    {
+      "name": "design",
+      "source": "./plugins/design",
+      "description": "Brainstorming, plans, section-by-section reviews, design sessions and new UI."
+    },
+    {
+      "name": "handoff",
+      "source": "./plugins/handoff",
+      "description": "The hand-off site: review pages, phased plans, sign-off checklists and hand-offs for people."
+    },
+    {
+      "name": "scaffold",
+      "source": "./plugins/scaffold",
+      "description": "Governance and setup: new orgs, new repos, licences, reuse and helper repos."
+    },
+    {
+      "name": "secrets",
+      "source": "./plugins/secrets",
+      "description": "Optional: connect your password manager and follow its credential rules."
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+# Unattended answers for `warren init --config`, used by the clean-container test.
+# It names where secrets come from and never holds one: warren rejects a value that looks like a
+# secret (WARREN-CONFIG-SECRET).
+version: 1
+role: agent-machine        # ops | contributor | agent-machine
+tools: [tmux, gh, claude]
+github:
+  login: testperson                # a person today; an agent identity later
+  name: testperson
+  email: 1+testperson@users.noreply.github.com
+  token_env: GH_TOKEN              # read from the environment at run time, never from the file
+  signing: none                    # none | ssh
+  guard: per-host                  # always per host; the config never copies another host's guard
+secrets:
+  enabled: false
+  url: ""                          # per person
+  secret_paths: []                 # the paths this role may inject; values never appear here
+marketplaces: [ai-warren]
+plugins: [warren@ai-warren]
+org_plugins: []                    # e.g. warren-org-example@example-org

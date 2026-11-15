@@ -1,0 +1,3 @@
+# Variants that ship a service container image and get the shared multi-arch
+# image workflow (templates/governance/.github/image-workflows/) at scaffold time.
+app

@@ -1,0 +1,10 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "treatWarningsAsErrors": true,
+  "entryPoints": ["packages/main.ts"],
+  "out": "docs",
+  "readme": "README.md",
+  "excludePrivate": true,
+  "excludeInternal": true,
+  "exclude": ["**/*.stories.tsx", "**/*.test.tsx"]
+}

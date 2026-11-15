@@ -1,0 +1,5 @@
+# Ecosystem base GitHub topics for claude-code repos, applied at scaffold time.
+# topics.<variant> adds that variant's own topic on top of these.
+# Domain topics (e.g. mqtt, amqp, billing) are per-repo and added by the owner.
+claude-code
+bash

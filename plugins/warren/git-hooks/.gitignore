@@ -1,0 +1,5 @@
+# Local only: the term lists live in ~/.config/warren/terms/ and the org scanner cache in
+# ~/.cache/git-scrub/. These lines catch a copy that lands here by mistake.
+*-terms.txt
+scrub/cache/
+__pycache__/

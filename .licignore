@@ -1,0 +1,9 @@
+# GoLic, for more details see: https://github.com/Bugs5382/golic
+# Ignore everything
+*
+
+# But inject license into Go sources...
+!*.go
+
+# The scaffold templates get their header when a repo is made from them.
+plugins/scaffold/templates/**

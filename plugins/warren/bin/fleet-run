@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Runs one headless prompt in each repo of a list, a few at a time, with one log per repo.
+#
+#   fleet-run <repos-file> "<prompt>" [--jobs N] [--tools "Edit,Read,Bash"] [--dry-run]
+#
+# <repos-file>: one repo per line, "<Org> <repo>" (under $WARREN_CODE_ROOT, default ~/Code) or a path.
+# Logs: ${WARREN_FLEET_LOGS:-~/.claude/warren/fleet-logs}/<timestamp>/<org>__<repo>.log
+# Default is 4 jobs at a time, never all at once. Every run costs tokens: use --dry-run first, and
+# tell the owner the repo count before a real run. The prompt should name the issue and say to
+# work in a worktree and to commit and push as separate commands. Merges still need the owner's Yes.
+set -euo pipefail
+
+usage() { sed -n '2,11p' "$0"; exit 2; }
+[ $# -ge 2 ] || usage
+LIST=$1; PROMPT=$2; shift 2
+JOBS=4; TOOLS="Edit,Read,Bash"; DRY=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --jobs) JOBS=$2; shift ;;
+    --tools) TOOLS=$2; shift ;;
+    --dry-run) DRY=1 ;;
+    *) usage ;;
+  esac
+  shift
+done
+[ -f "$LIST" ] || { echo "no such file: $LIST" >&2; exit 2; }
+ROOT=${WARREN_CODE_ROOT:-$HOME/Code}
+LOGS=${WARREN_FLEET_LOGS:-$HOME/.claude/warren/fleet-logs}/$(date +%Y%m%d-%H%M%S)
+mkdir -p "$LOGS"
+
+run_one() {  # run_one <line>
+  local line=$1 dir name
+  case "$line" in
+    /*) dir=$line; name=$(basename "$line") ;;
+    *) set -- $line
+       if [ $# -eq 2 ]; then dir="$ROOT/$1/$2"; name="$1__$2"; else dir="$ROOT/$1"; name=$(echo "$1" | tr / _); fi ;;
+  esac
+  [ -d "$dir" ] || { echo "SKIP $line: no folder $dir"; return 0; }
+  if [ "${FLEET_DRY:-0}" = 1 ]; then echo "would run in $dir"; return 0; fi
+  if (cd "$dir" && claude -p "$FLEET_PROMPT" --allowedTools "$FLEET_TOOLS" > "$FLEET_LOGS/$name.log" 2>&1); then
+    echo "OK   $line"
+  else echo "FAIL $line (see $FLEET_LOGS/$name.log)"; fi
+}
+export -f run_one
+export FLEET_PROMPT="$PROMPT" FLEET_TOOLS="$TOOLS" FLEET_LOGS="$LOGS" FLEET_DRY="$DRY" ROOT
+
+grep -v '^[[:space:]]*$' "$LIST" | grep -v '^#' | xargs -P "$JOBS" -I{} bash -c 'run_one "$1"' _ {}
+echo "logs: $LOGS"

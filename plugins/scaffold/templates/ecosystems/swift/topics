@@ -1,0 +1,4 @@
+# Ecosystem base GitHub topics for swift repos, applied at scaffold time.
+# Domain topics (e.g. ios, healthcare) are per-repo and added by the owner.
+swift
+apple

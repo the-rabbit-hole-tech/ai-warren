@@ -1,0 +1,17 @@
+# GoLic, for more details see: https://github.com/Bugs5382/golic
+# Ignore everything
+*
+
+# But inject license into Swift sources...
+!*.swift
+
+# ...even when they live in subdirectories:
+!*/
+
+# Never build output, packages or generated code:
+/.build/**
+**/.build/**
+/DerivedData/**
+**/DerivedData/**
+/.swiftpm/**
+**/Generated/**

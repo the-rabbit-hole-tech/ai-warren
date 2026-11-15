@@ -1,0 +1,367 @@
+# Page files
+
+A page file is one JSON file per page, `<folder>/<slug>.json`, in the `handoff.page/v1` format. It holds the
+page definition, every round of answers with who and when, and a reply thread per item. The full design is in
+`docs/design/json-pages.md` in the repo.
+
+This covers the file format, the one module that writes it, the `page.py` command line for agents, the
+server endpoints that read and write it (listed in `docs/operating.md` in the repo), and the renderer that
+draws it. HTML pages keep working as they always have.
+
+## Before you start
+
+- Python 3.9 or newer, the system Python on macOS included. Both modules are standard library only.
+- Run them from `_site/` (or put `_site/` on `sys.path`): `pagefile.py` imports `schema.py`.
+
+## Viewing a page
+
+A page file is shown at `/<folder>/<slug>`. The server answers with `_site/app.html`, and the React app in `_site/app/` (built from `web/` in the repo)
+draws the page from `GET /_page/<folder>/<slug>` into the same markup an HTML page uses, so `site.css` and
+`review.js` work unchanged:
+
+- each answerable item is a numbered card (`<section data-review-question>`), and `info` items are plain
+  sections;
+- each item answers its own way, so one page can mix them: a section takes Yes / No / Changes (or its own
+  `answers` set), a check or step adds Skipped, `skip: true` adds Skipped to that item only, a choice uses the
+  page's `options` and default, and a question takes free text;
+- the page's settings become the body attributes `review.js` reads: the build, what's blocked (an unmet
+  `dependsOn`, or a `blockedBy` with no `unblock` reply), the earlier-round Yes items to hide, and the reopened
+  items with their reasons;
+- how-tos become `<template data-howto>`, pictures open in the picture pop-out, and diff items and blocks
+  are drawn by the server with `diff.py`, with the Diff | Final switch;
+- `reference` and `status` pages have no answer bar.
+
+The app saves through `PUT /_page/.../answers` (, only the items this tab changed), and
+History lists the page's closed rounds. When the page's route sends, Blocker becomes "Blocker: send now" and
+the bar gains "Send to <agent>" with the latest send's delivery state: "Sent 07:42", "Picked up by app 07:43",
+"app replied 07:50: ..." (a link to the page's replies), or "app isn't listening." with a Copy results instead
+button. A journey shows "Restart from a checkpoint" with one button per checkpoint reached; picking one asks
+first, on the page, and once restarted the restart shows its own delivery state. Under each item, a thread lists
+my answers from earlier rounds and the agents' replies, oldest first, with who, the round, when, and a tag for
+Filed, Fixed, Reopened (with the reason), Unblocked and Won't fix; past four entries the oldest fold behind
+"Show N earlier". Replies about the whole page (`_page`) sit in their own card at the top.
+
+The page polls every 10 seconds and redraws in place when the file changes: never while the owner is typing, within
+3 seconds of a click, or while answers are still unsaved, and it keeps the scroll position. When the only
+change is this tab's own answers coming back, it doesn't redraw.
+
+## On the index
+
+A page file is its own index card; it needs no `_status.json` entry. The card follows the same rules as an HTML
+page's: it sorts by `status.priority`, then by the number in its title or slug; it shows the open count (or a
+backlog's per-choice counts), To review, Reopened and Approved, the Reference or Done chip, and `status.chips`.
+It stays in Needs you until every counted item is Yes, unless `status.state` says otherwise. Stale marks it done
+and moves the file to `<folder>/_old/`. Its closed rounds are listed on `/<folder>/history/` with their Copy
+results text.
+
+## The format
+
+The definition keys sit at the top level, and the server keys are managed by `pagefile.py`.
+
+| Key | Written by | Meaning |
+|---|---|---|
+| `schema` | definition | always `handoff.page/v1` |
+| `kind` | definition | `review`, `checklist`, `journey`, `backlog`, `questions`, `reference`, `status` or `round` |
+| `title`, `summary` | definition | the heading and the line under it |
+| `build`, `reset` | definition | the build under test and a reset counter; changing either opens a new round |
+| `status` | definition | the index card: `{"state": "needs-you", "note": "...", "chips": [...], "priority": 20}` |
+| `options` | definition | a backlog's choices: `{"choices": [{"value": "start", "label": "Start"}, ...], "default": "hold"}` |
+| `items` | definition | the content, in order |
+| `phases` | definition | a round's phases: `[{"id": "A", "title": "...", "goal": "...", "dependsOn": ["A"]}]`; item ids become `A1`, `A2`, `B1` |
+| `deck` | definition | `true` adds Build a deck to the bar's More menu |
+| `template` | definition | a template from `custom/custom.js`, see `CUSTOM.md` |
+| `drafts` | definition | `true` adds Draft email to every item |
+| `emails` | server | versions of each item's email, numbered from 1 |
+| `revisions` | server | each item's earlier definitions: `{"at", "round", "before", "after"}` |
+| `route` | operator | `{"to": "ops", "mode": "send"}`; set with `set_route`, never in a definition |
+| `rev` | server | 1 on create, up by 1 on every write |
+| `rounds` | server | every round of answers, numbered from 1 |
+| `thread` | server | replies per item id (and `_page`), numbered from 1 per item |
+| `submissions` | server | every Send and Blocker |
+
+Each kind gives items a default type: `review` uses `section`, `checklist` uses `check`, `journey` uses
+`step`, `backlog` uses `choice`, `questions` uses `question`, and `reference` and `status` use `info`.
+`reference` and `status` pages hold `info` items only. A `checklist` needs a `build`, and a `backlog` needs
+`options`.
+
+### Items
+
+Every item has an `id` (`a-z`, `0-9`, `_` and `-`, up to 41 characters, unique on the page) and a `title`.
+Answers are keyed by id, so reordering items never moves an answer.
+
+| Type | Answers | Extra fields |
+|---|---|---|
+| `section` | Yes / No / Changes | `body` |
+| `check` | adds Skipped | `body`, `howto`, `dependsOn`, `blockedBy` |
+| `step` | adds Skipped | `steps`, `checkpoint`, `howto`, `dependsOn`, `blockedBy` |
+| `screen` | Yes / No / Changes | `images` (`[{src, alt, caption}]`), `fields` (`[{name, type, rule}]`), `body` |
+| `contract` | Yes / No / Changes | `fields`, `forms` (`[{name, fields}]`), `body` |
+| `diff` | Yes / No / Changes | `old`, `new`, `code` |
+| `question` | free text | `body`, `suggested` |
+| `choice` | the page's `options`, or its own `choices` | `body`, `choices`, `multi` |
+| `info` | none | `body` |
+
+Answerable items also take `answers` (their own set, such as `["yes", "no"]`), `skip: true` (adds Skipped),
+`dependsOn` (ids on the same page) and `blockedBy` (free text), and any item can take `section`, a group
+heading.
+
+### An item's own choices
+
+A `choice` item can carry its own options, and then works like a question in a dialog: 2 to 4 options, one per line, each with a `label` and a short `description`. The recommended option goes first, with `"recommended": true`, and shows "(Recommended)". Other is always there at the bottom and opens a text box. There's an optional note. `"multi": true` lets the person pick several.
+
+```json
+{"id": "r1", "type": "choice", "title": "When do we restart?", "choices": [
+  {"value": "tonight", "label": "Tonight", "description": "Lowest traffic", "recommended": true},
+  {"value": "weekend", "label": "At the weekend", "description": "More people on hand"}]}
+```
+
+The answer is the value, comma-joined when it's `multi`. Other is `other`, with its text in the answer's `other` field. `page.py new`, `set` and `check` warn, without stopping, when an item's text lists options such as "Option 1" and "Option 2" but the item has no choices.
+
+### Skippable questions
+
+A page with `"skippable": true` gives each `question` item a Skip button. The flag is a page setting, not part of an item, so
+turning it on changes no item's hash and reopens no answer. A skipped question is `"skipped": true` on the round's answer entry,
+and its `answer` and `note` stay, so text the person typed comes back on Un-skip (`"skipped": false`). While it is skipped the
+text is locked (`save_answers` refuses a new answer with "un-skip to change"), and a skip survives Save round now like any answered
+question. Other item types still take `skip: true` per item; `skip` stays an error on a question. `summary` adds `skipped` (only
+when above 0), and a page card counts a skipped question as handled. In a Send, a skipped question carries `"skipped": true` and an
+empty `answer`; Copy results reads `SKIPPED: <title>`.
+
+### The backlog board
+
+A `backlog` page (items that pick Start or Hold) with `"droppable": true` gets a board with three behaviours:
+
+- **Start only marks.** Pressing Start (or any pick) saves the mark on the page and sends nothing. A **Send this item** button
+  then appears on that item, and only that button sends the pick: a send with `"scope": "item"`, which locks the item while it
+  waits. A **Start or Hold has to be pressed first**: the button appears
+  once the item has a pick, and a comment alone offers nothing (the server refuses a comment-only send for a choice item too).
+  What a sent pick means: **Start** is go (add it to the active work queue); **Hold** alone is just hold; **Hold with a comment**
+  is a request to revise or update the backlog item as the comment says. Undoing the mark before sending is local. The page has no page-wide Send. Other pages of choices get the same
+  per-item **Send this item** button as well as their usual Send, including items with their own `choices`.
+- **Drop.** Drop is final: gone, for good. Each choice item has a **Drop** button with a confirm step ("Drop Backlog 12? This removes it from the board.").
+  Confirming sends a submission of kind `drop` for that one item (file name prefix `5-`, with the sends). The item then reads
+  **Drop requested**, takes no pick, and stays that way until a reply is posted under it or the item is gone from the page.
+  Nothing else is held.
+- **Contents.** A page with 12 or more items starts with a collapsible, sticky **Contents** list (title, a small status such
+  as `start` or `drop requested`, and a filter for words or a number). A link jumps to the item, opens it if it is folded,
+  and folds the list away.
+
+**Backlog is a system of its own, not an OPS page.** It has a folder of its own in `site.json`, marked as a board, with the
+page `backlog/board`:
+
+```json
+{"folders": [{"id": "backlog", "name": "Backlog", "blurb": "Everything waiting to be done", "board": true, "landing": "board"}],
+ "redirects": {"/ops/backlog": "/backlog/board"}}
+```
+
+- `"board": true` gives the folder its own section at the top of the home page (its name, how many items are on it, a link),
+  and keeps it out of Needs you now, the folder grid, the project filter, Reference and Completed.
+- `"landing": "board"` makes `/backlog` and `/backlog/` open `/backlog/board` (a `302`, which adds no history entry). A folder
+  without it keeps its index. The landing page's own Back link, the Back to link at the end of a finished page and the return
+  after Copy results go to the home page (labelled Home), because its folder link would only redirect back to it.
+- `"redirects"` maps old paths to new ones (a `301`, with or without a trailing slash or `.html`), so bookmarks keep working. A
+  target has to be a plain path on the site; anything else is ignored.
+- `backlog-page.py` writes `backlog/board` (`--page <folder>/<slug>` or `WARREN_BACKLOG_PAGE` to change it). Sends still go to
+  the page's route, the operator by default; the page's own wording does not name OPS.
+- `page.py move <old> <new> [--redirect]` moves any page file to another `<folder>/<slug>` with its answers, rounds, sends and
+  thread (and its lock file), refuses to overwrite a page, and with `--redirect` records the redirect.
+
+**Item context.** In `backlog.json` an item's `context` is drawn as separate blocks: each line is a paragraph (start it with
+`**Label:**` for a bold label), consecutive lines starting with `- ` are one bullet list, and a context over 600 characters
+shows its first paragraph and folds the other blocks into a `details` block. Ids, picks and `--read` do not change.
+
+How the operator reads them (`backlog-page.py --read` does this for the backlog, printing `Backlog 12: START | comment`, `HOLD | comment`,
+`HOLD (sent)` for a sent Hold with no comment, and `HOLD (default)` for an item nothing was sent for): a pick counts only if it was **sent**, so read
+the answer that the latest item send carried (`pagefile.sent_answer(doc, id)`; a mark made after that send is not it, and an
+unlocked send is taken back). A mark that was not sent is the default. A drop is pending while a `drop` submission for the item
+has no reply under the item after it (`pagefile.dropping_items(doc)`; `states[id].dropping` is true). To drop, remove the item from
+the page definition (for the backlog: set it `dropped` in backlog.json and run `backlog-page.py`); the request goes with the
+item. To decline, `page.py reply <page> <id> --from <agent> "why"`. Move the inbox file to `taken/` either way.
+
+### Generating an email
+
+Use this when someone outside the page needs telling: an inventory step was re-verified and the data changed, so the network team needs to know what's different, or some devices couldn't be reached, so a note goes to whoever can grant access.
+
+With `"drafts": true`, every item has Generate an email in its More button, whatever its answer. The person says who it's to, what they need from them, and the tone. That goes to the agent's inbox the same way as a Send, as a submission of kind `email`, with a `context` holding the step: its title and body, what changed between rounds, and the comments and replies, so the person doesn't retype any of it. It doesn't answer the item or lock it.
+
+The agent answers with `page.py email`. The email appears in the step as To, Subject and Body, each with a copy button, as a new version. Earlier versions stay readable. Ask for changes gets another version, sending `change` and `basedOn`.
+
+### Building a deck
+
+With `"deck": true`, the bar's More menu has Build a deck, which runs only when it's pressed. It asks what the person is trying to build, and sends that as `framing` in a submission of kind `deck`. The deck's content is only the items whose final answer is Yes or Accept risk, each with its title, body and note. It locks nothing. The agent builds the deck, saves it beside the page and replies with the link, such as `page.py reply app/plan _page --from app "[The deck](/app/plan-deck.pptx)"`. On a page that only copies, the button copies the same content instead.
+
+### Body blocks
+
+`body` and `howto` are lists of blocks, each with exactly one of these keys. A `howto` shows inline under its item
+as a collapsed How to test row that opens in place, on checklist, review and round pages alike. Its heading names
+the `build` under test, and every code block in it has a Copy button. No window opens.
+
+| Block | Shape |
+|---|---|
+| `p` | `{"p": "text"}`, inline `**bold**`, `*em*`, `` `code` `` and `[text](url)` only. A code span, an `http(s)` link and a bare `http(s)` address are each followed by a small Copy button, so a step needs no separate copy block for them |
+| `list`, `olist` | `{"list": ["a", "b"]}` |
+| `code` | `{"code": "...", "lang": "sh"}` |
+| `image` | `{"image": "img/a.png", "alt": "...", "caption": "..."}`, a file next to the page, never a `data:` URI |
+| `table` | `{"table": [["h1", "h2"], ["a", "b"]]}`, the first row is the header |
+| `diff` | `{"diff": {"old": "...", "new": "...", "code": false}}` |
+| `copy` | `{"copy": "text"}` |
+| `note` | `{"note": "text", "tone": "warn"}`, tone `info`, `warn`, `ok` or `danger` |
+| `html` | `{"html": "..."}`, an escape hatch for content nothing else fits |
+| `details` | `{"details": "Details", "body": [blocks]}`, a foldable group of blocks under a one-line summary, closed by default |
+
+## Sample pages
+
+`_site/samples/` holds one sample of every page kind, including pages part-way through a round: a Blocked by, a
+reopened item, a handled Changes and a part-sent page. All the data is made up. `page.py samples <folder>` loads
+them, and running it again puts them back as they were, without touching any other page in the folder.
+
+## Checking a file
+
+```bash
+python3 _site/schema.py app/design.json
+```
+
+It prints one error per line and exits 1 when there are any. Each error gives the JSON path: items by id,
+and every other list by position counted from 1.
+
+```text
+items[c1].steps: expected a list of strings
+items[s2].body[#3].tone: expected one of info, warn, ok, danger
+```
+
+## The command line
+
+Agents use `page.py`; it writes through `pagefile.py`, so it takes the same lock. A page is named
+`<folder>/<slug>`, and `--root` sets the site folder (the default is the folder above `_site/`).
+
+| Command | What it does |
+|---|---|
+| `page.py new app/design --from design.json` | creates a page (the definition comes from stdin without `--from`) |
+| `page.py set app/design --from design.json` | replaces the definition; a `build` or `reset` change opens a round |
+| `page.py fixing app/design s1 "bug log 246"` | marks an item fix in progress; `--clear` takes the mark off and the item is open again |
+| `page.py reply app/design s1 --from app --reopen "fixed in #70" "Fixed in #70."` | a reply under an item, or `_page`; `--action` takes `filed`, `fixed`, `reopen`, `unblock`, `wontfix` or `info`, with `--reason` and `--ref` |
+| `page.py status app/design done --note "Shipped" --chip Shipped --priority 10` | the index card |
+| `page.py route app/design --to app --mode send` | the page's route (the operator's call) |
+| `page.py round-close app/design --results "..."` | Save round now |
+| `page.py check app/design` | validates a page or a `.json` file; errors give the JSON path, exit 1 on any |
+| `page.py wait app` | blocks until a submission is in `_inbox/app/`, prints the files (blockers first) and exits |
+| `page.py hook app` | prints one line when the inbox has untaken files or nothing is listening (nothing while listeners are paused) |
+| `page.py listeners pause --until 06:00` | pauses all listeners until then (`on` resumes, `status` shows); see "Pausing the listeners" in `PAGE-API.md` |
+| `page.py email app/design s1 --from app --request 4 --subject "Why" "Dear team,..."` | an email comes back as the next version on that item; `--request` is the submission that asked, so the version keeps who it's to and what was asked |
+| `page.py samples demo --route app` | loads the sample pages into a folder as `sample-*`; run it again to reset them |
+| `page.py convert app/design.html` | turns a review.js page into a page file next to it (`--print` shows the definition only) |
+
+### Listening for submissions
+
+There are two ways, and a session should use one of them all the time a page is open.
+
+**`page.py listen <agent>`** is the always-on one. It stays running, prints one line per new submission, and never exits on a delivery, so the page stays connected. Run it under whatever watches a command's output and wakes the session on each line. Starting it again after a restart lists what's still waiting. A second one for the same agent refuses to start.
+
+**`page.py wait <agent>`** exits on each delivery, which suits a background job that wakes the session when it ends:
+
+Run `page.py wait <agent>` as a background command and act when it exits:
+
+1. Read the files it printed, blockers first.
+2. Take each one by moving it to `_inbox/<agent>/taken/`; the page then shows it as picked up.
+3. Do the work and answer with `page.py reply`.
+4. Start `page.py wait <agent>` again.
+
+After a delivery, the page keeps showing the agent as listening for 15 minutes while it works, then says it isn't, if nothing has started waiting again. It exits at once when files are already waiting, and waits about 200 ms after the first file so a Send and a
+Blocker that land together are both listed. While it runs it keeps its pid in `_inbox/<agent>/.listening`, so
+the page can say whether the agent is listening. It uses kqueue where there is one, and otherwise checks the
+folder every 2 seconds (`--poll` forces that). `--timeout S` gives up after S seconds with exit code 3.
+
+`page.py hook <agent>` is for a hook that runs whenever the agent is next spoken to: it stays quiet while the
+agent is listening and its inbox is empty, and otherwise prints one line saying what to do.
+
+### Converting an HTML page
+
+`page.py convert <folder>/<page>.html` maps a review.js page to a page file beside it and leaves the HTML in
+place, so both can be checked side by side:
+
+- each `<h2>` becomes an item `s1`, `s2` and so on, and on a `data-review-h2="off"` page each
+  `[data-review-question]` section becomes an item with its own id in lower case, so saved answers still match
+  (two ids that differ only by case stop the convert);
+- a page that doesn't load `review.js` becomes a `reference` page;
+- `data-build`, `data-review-reset`, `data-review-options` and `data-review-default`, `data-review-skip`,
+  `data-review-blocked` (a dependsOn when it names an item, else a blockedBy), question items and
+  `<template data-howto>` carry over, and the folder's `_status.json` entry becomes `status`;
+- paragraphs, lists, code, pictures, tables and `.rvdiff` blocks become blocks; a table with merged cells and
+  anything else is kept as a flagged `html` block and named on stderr;
+- the saved answers (`_saved/<page-key>.json`) become the open round and the round history files become
+  closed rounds, with their numbers kept;
+- a `data-review-approved` item counts as Yes, and one that was already Yes in the last closed round stays
+  hidden, as it was on the HTML page;
+- a `data-review-reopen` item is reopened, unless it was answered again since; then the reason becomes an
+  `info` reply from the operator under the item.
+
+## Writing a file
+
+Only `pagefile.py` writes page files. Every write locks `<slug>.json.lock`, validates the result, writes a
+temp file and renames it into place, so two writers never lose each other's changes. A page larger than 2 MB
+is refused.
+
+| Call | What it does |
+|---|---|
+| `write_definition(path, definition)` | creates the page (rev 1, round 1), or replaces its definition; a `build` or `reset` change closes the round and opens the next |
+| `set_fixing(path, id, text)` / `clear_fixing(path, id)` | marks an item "fix in progress" (say what, like a bug log number) or takes the mark off |
+| `reopen(path, id, reason, by=...)` | takes the lock off a confirmed Yes; the reason is required |
+| `save_answers(path, {id: {answer, note}}, by=..., base=rev)` | merges one tab's changed answers into the open round, item by item; stamps `by`, `at` and the item's hash, and keeps earlier values in `was` |
+| `new_round(path, results=...)` | Save round now: closes the round with its Copy results text and opens the next |
+| `restart(path, checkpoint, by=...)` | restarts a journey from a checkpoint already reached: the steps up to it carry over as Yes, later steps start open |
+| `reply(path, id, frm, text, action=..., reason=..., ref=...)` | appends a reply under an item or `_page`; `action="reopen"` reopens the item |
+| `set_route(path, to, mode)` | the operator's route for the page |
+| `set_status(path, state, note=..., chips=..., priority=...)` | the index card |
+| `add_submission(path, record)`, `mark_taken(path, n)` | record a Send, Blocker or Restart, and its pick-up |
+| `item_states(doc)` | where each answerable item stands: its answer, whether an earlier Yes hides it, and why it reopened |
+| `summary(doc)` | the bar's counts: open, blocked, Yes, reopened, approved, skipped questions (only when any), and a backlog's per-choice tally |
+
+```python
+import pagefile
+
+pagefile.write_definition("app/design.json", {
+    "schema": "handoff.page/v1", "kind": "review", "title": "Design",
+    "items": [{"id": "s1", "title": "Purpose", "body": [{"p": "Why we need it."}]}],
+})
+pagefile.save_answers("app/design.json", {"s1": {"answer": "yes", "note": ""}}, by="Alex")
+```
+
+Answers are checked against the item: a value outside its set, Changes without a note, or an unknown id
+raises `PageError`, whose `errors` list says which item and why.
+
+### Rounds
+
+- A round opens when the page is created, when `build` or `reset` changes, on Save round now and on Restart.
+  Only the last round is open.
+- A Yes from an earlier round stays on the page as a collapsed row with Yes pressed and locked. Show opens the row.
+- An answered question and an item's own pick lock the same way once a Send has carried them and the agent has updated the page, with the answer still readable on the row. To ask more, add a new item that says which answer it follows from. Don't ask the same item again.
+- A Send locks the items it carried, and a banner says where it stands: in the agent's inbox, nobody listening, or
+  picked up. Everything else stays open, and a later Send carries only what's new. The agent's next `page.py set`
+  or `reply` unlocks them live, in the same round, and every Yes that Send carried is
+  then a locked row and stays in Copy results. "Unlock to change an answer" takes the lock off sooner and takes that
+  Send back, so its answers can change.
+- Send this item, in an answered item's More menu, sends that item on its own: a Send with `"scope": "item"`. It locks
+  only that item, and only a reply under it, a change to it, or "Unlock to change an answer" lifts it. A reply about the
+  whole page, or a change to other items, leaves it locked. Its Yes becomes a locked row once that reply comes, even
+  while another Send is still waiting. It isn't offered on a blocked, locked or unanswered item.
+- A sent No or Changes clears once the agent replies under the item or changes it. It moves to the round's `handled`
+  list, so an old note can't go out again, shows in the item's thread with what the agent did, and the item is open
+  again marked "Updated: answer again". A reply about the whole page clears nothing.
+- A Blocker clears the same way once the agent replies under its item or changes it. The note it carried moves to
+  `handled` with `"blocker": true`, the Blocker submission gets a `handled` time, and the item is no longer
+  flagged as a blocker. A note typed after the Blocker went stays, since it was never sent.
+- An item comes back open when a reply reopens it, or when its definition changes after its last Yes
+  ("changed since round N"). A reopen nobody has answered carries into the next round. A reopened Yes shows
+  unanswered, and one Yes clears it.
+- A Yes the reviewer confirms on the page is stored with `"locked": true` in its answer entry: its answer can't change
+  (`save_answers` refuses it with `LockedError`, HTTP `409`), but its note can. `reopen(path, id, reason, by=...)` removes
+  the flag, sets the item's reopen reason and appends the reason to its thread as a `reopen` entry from `by`, without
+  settling or releasing anything. Only a Yes can be locked, and not on a question or a choice. Next round, the Yes is an
+  ordinary hidden Yes.
+- An item marked fix in progress (`page.py fixing <page> <id> "bug log 246"`, and `--clear` to take it off) is drawn as a
+  purple card with a "Fix in progress" chip and the text, takes no answer (the server refuses one), and is left out of the
+  open count, Send and Copy results (which prints `FIX IN PROGRESS (text)`). The mark is stored beside the definition, in a
+  top-level `fixing` map of text by item id, so setting or clearing it changes neither the item's hash nor its answers, a
+  definition rewrite keeps it (and drops it with a removed item), and clearing returns the item to open. It keeps the page
+  from approved while it is set. Any answerable item can carry one; page files only.
+- A Yes on a step with a `checkpoint` records the time the checkpoint was reached.

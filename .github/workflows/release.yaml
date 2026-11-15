@@ -1,0 +1,74 @@
+name: Release
+# A pushed v* tag builds the warren CLI with GoReleaser (darwin and linux, amd64 and arm64) on a
+# GitHub-hosted runner. GoReleaser only builds here (--skip=publish); scripts/attach-release.sh puts
+# the archives and the checksums file into the release that already exists for the tag. That is
+# release-drafter's release: publishing its draft creates the tag, which starts this workflow, so a
+# tag never ends up with two releases. Only when no release exists for the tag does the script
+# create a draft; publishing stays a manual step. A second job packs the hand-off web
+# (adapters/handoff-web) into the same release. Nothing runs on pull requests.
+on:
+  push:
+    tags: ["v*"]
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+permissions:
+  contents: write
+jobs:
+  goreleaser:
+    name: 📦 Build CLI assets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          cache: false
+          go-version-file: go.mod
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: v2.11.2
+          args: release --clean --skip=publish,announce
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOWORK: "off"
+      - name: Attach to the release for the tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: scripts/attach-release.sh "$GITHUB_REF_NAME" dist/warren_*.tar.gz dist/warren_*_checksums.txt
+  handoff_web:
+    name: 📦 Pack the hand-off web
+    needs: goreleaser
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Version from the tag
+        id: version
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          case "$v" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "tag $GITHUB_REF_NAME is not vX.Y.Z" >&2; exit 1 ;;
+          esac
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - name: Pack
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: adapters/handoff-web/scripts/build-release.sh "$VERSION" dist
+      - name: Check the checksum
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: cd dist && shasum -a 256 -c "handoff-web-$VERSION.sha256"
+      - name: Attach to the release for the tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: scripts/attach-release.sh "$GITHUB_REF_NAME" "dist/handoff-web-$VERSION.tar.gz" "dist/handoff-web-$VERSION.sha256"

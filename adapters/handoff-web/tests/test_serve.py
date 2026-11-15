@@ -1,0 +1,394 @@
+"""End-to-end tests for template/_site/serve.py: a real server on a free port in a temp folder."""
+
+import http.client
+import importlib.util
+import json
+import os
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+import pytest
+
+from sites import html_example
+
+ROOT = Path(__file__).resolve().parent.parent
+SERVE = ROOT / "template" / "_site" / "serve.py"
+
+
+def load_serve():
+    spec = importlib.util.spec_from_file_location("serve", SERVE)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
+def request(url, method="GET", body=None, ctype="application/json"):
+    data = body.encode() if isinstance(body, str) else body
+    req = urllib.request.Request(url, data=data, method=method)
+    if ctype and data is not None:
+        req.add_header("Content-Type", ctype)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status, r.read(), dict(r.headers)
+    except urllib.error.HTTPError as e:
+        return e.code, e.read(), dict(e.headers)
+
+
+@pytest.fixture()
+def site(tmp_path):
+    root = tmp_path / "site"
+    shutil.copytree(ROOT / "template", root)
+    for d in ("demo", "guide"):
+        shutil.copytree(html_example(d), root / d)
+    shutil.copy(ROOT / "example" / "site.json", root / "site.json")
+    port = free_port()
+    proc = subprocess.Popen([sys.executable, str(root / "_site" / "serve.py"), str(port), "--bind", "127.0.0.1",
+                             "--directory", str(root)], stderr=subprocess.PIPE)
+    base = f"http://127.0.0.1:{port}"
+    for _ in range(100):
+        try:
+            urllib.request.urlopen(base + "/", timeout=1)
+            break
+        except OSError:
+            time.sleep(0.05)
+    yield root, base
+    proc.terminate()
+    proc.wait(timeout=5)
+
+
+def test_static_and_cache_headers(site):
+    _, base = site
+    status, _, headers = request(base + "/demo/design-review.html")
+    assert status == 200
+    assert headers.get("Cache-Control") == "no-store"
+    status, _, headers = request(base + "/_site/site.css")
+    assert status == 200
+    assert "Cache-Control" not in headers
+
+
+def test_save_round_trip(site):
+    root, base = site
+    assert request(base + "/_save/review-demo.json")[0] == 404
+    assert request(base + "/_save/review-demo.json", "PUT", '{"s1": {"v": "yes", "n": ""}}')[0] == 204
+    status, body, headers = request(base + "/_save/review-demo.json")
+    assert status == 200
+    assert json.loads(body) == {"s1": {"v": "yes", "n": ""}}
+    assert headers.get("Cache-Control") == "no-store"
+    assert (root / "_saved" / "review-demo.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("path", "body", "ctype", "code"),
+    [
+        ("/_save/Bad.json", "{}", "application/json", 405),
+        ("/_save/x.json", "not json", "application/json", 400),
+        ("/_save/x.json", "{}", "text/plain", 415),
+        ("/_save/stale-log.json", "{}", "application/json", 405),
+        ("/demo/x.json", "{}", "application/json", 405),
+    ],
+    ids=["bad-name", "not-json", "wrong-type", "reserved-name", "outside-save"],
+)
+def test_save_rejects(site, path, body, ctype, code):
+    _, base = site
+    assert request(base + path, "PUT", body, ctype)[0] == code
+
+
+def test_save_rejects_oversized_body(site):
+    _, base = site
+    conn = http.client.HTTPConnection(base.removeprefix("http://"), timeout=10)
+    conn.putrequest("PUT", "/_save/x.json")
+    conn.putheader("Content-Type", "application/json")
+    conn.putheader("Content-Length", str(256 * 1024 + 1))
+    conn.endheaders()
+    assert conn.getresponse().status == 413
+    conn.close()
+
+
+def test_saved_folder_never_served(site):
+    _, base = site
+    request(base + "/_save/x.json", "PUT", "{}")
+    for p in ("/_saved/", "/_saved/x.json", "/_site/../_saved/x.json", "/%5Fsaved/x.json"):
+        assert request(base + p)[0] == 404, p
+
+
+def test_stale_deletes_and_marks_done(site):
+    root, base = site
+    status, body, _ = request(base + "/_stale", "POST", json.dumps({"folder": "demo", "page": "design-review.html"}))
+    assert status == 200, body
+    assert not (root / "demo" / "design-review.html").exists()
+    entry = json.loads((root / "demo" / "_status.json").read_text())["design-review.html"]
+    assert entry["state"] == "done"
+    assert entry["note"].startswith("Stale (Alex, ")
+    log = (root / "_saved" / "stale-log.json").read_text().splitlines()
+    assert json.loads(log[-1])["page"] == "design-review.html"
+    assert (root / "demo" / "signoff-checklist.html").exists()
+    unified = (root / "demo" / "review" / "index.html").read_text()
+    assert 'data-src="design-review.html"' not in unified
+    assert 'data-review-stale="design-review.html"' in unified
+
+
+@pytest.mark.parametrize(
+    ("payload", "code"),
+    [
+        ({"folder": "demo", "page": "review/"}, 404),
+        ({"folder": "demo", "page": "missing.html"}, 404),
+        ({"folder": "_site", "page": "review.js"}, 400),
+        ({"folder": "../x", "page": "a.html"}, 400),
+        ({"folder": "demo"}, 400),
+    ],
+)
+def test_stale_rejects(site, payload, code):
+    _, base = site
+    assert request(base + "/_stale", "POST", json.dumps(payload))[0] == code
+
+
+def test_stale_refuses_protected(site):
+    root, base = site
+    cfg = json.loads((root / "site.json").read_text())
+    cfg["protected"] = ["demo/signoff-checklist.html"]
+    (root / "site.json").write_text(json.dumps(cfg))
+    status, _, _ = request(base + "/_stale", "POST", json.dumps({"folder": "demo", "page": "signoff-checklist.html"}))
+    assert status == 403
+    assert (root / "demo" / "signoff-checklist.html").exists()
+
+
+def test_page_path_rejects_escapes(tmp_path):
+    serve = load_serve()
+    (tmp_path / "demo").mkdir()
+    (tmp_path / "demo" / "a.html").write_text("x")
+    (tmp_path / "site.json").write_text("{}")
+    assert serve.page_path(str(tmp_path), "demo", "a.html") == str(tmp_path / "demo" / "a.html")
+    for bad in ("../site.json", "_old/a.html", "index.html", "review/", "a.html/", "/etc/passwd", "", ".hidden",
+                "x/../../site.json"):
+        assert serve.page_path(str(tmp_path), "demo", bad) is None, bad
+
+
+def test_prune_old_removes_only_old_files(tmp_path):
+    serve = load_serve()
+    old = tmp_path / "demo" / "_old"
+    old.mkdir(parents=True)
+    (old / "stale.html").write_text("x")
+    (old / "fresh.html").write_text("x")
+    (tmp_path / "demo" / "page.html").write_text("x")
+    past = time.time() - 9 * 86400
+    os.utime(old / "stale.html", (past, past))
+    os.utime(tmp_path / "demo" / "page.html", (past, past))
+    removed = serve.prune_old(str(tmp_path), str(tmp_path / "_saved"), 7)
+    assert removed == [os.path.join("demo", "_old", "stale.html")]
+    assert (old / "fresh.html").exists()
+    assert (tmp_path / "demo" / "page.html").exists()
+    assert "stale.html" in (tmp_path / "_saved" / "prune-log.json").read_text()
+
+
+def test_refuses_to_serve_inside_git_work_tree(tmp_path):
+    (tmp_path / ".git").mkdir()
+    site = tmp_path / "site"
+    site.mkdir()
+    r = subprocess.run([sys.executable, str(SERVE), str(free_port()), "--directory", str(site)],
+                       capture_output=True, text=True, timeout=10)
+    assert r.returncode != 0
+    assert "git work tree" in r.stderr
+
+
+# ---------- round history ----------
+
+CHECKLIST = "demo/signoff-checklist.html"
+NAME = "review-demo-signoff-checklist.html"
+
+
+def bump_build(root, build):
+    page = root / CHECKLIST
+    src = page.read_text()
+    src = re.sub(r'data-build="[^"]*"', f'data-build="{build}"', src)
+    page.write_text(src)
+
+
+def test_round_archived_on_build_change(site):
+    root, base = site
+    assert request(base + f"/_save/{NAME}.json", "PUT", '{"t1": {"v": "yes", "n": ""}}')[0] == 204
+    assert not (root / "_saved" / "history" / NAME).exists()
+    bump_build(root, "1.4.0-rc.3")
+    assert request(base + f"/_save/{NAME}.json",
+                    "PUT", '{"t1": {"v": "yes", "n": ""}, "t2": {"v": "no", "n": "broke"}}')[0] == 204
+    files = list((root / "_saved" / "history" / NAME).glob("*.json"))
+    assert len(files) == 1
+    entry = json.loads(files[0].read_text())
+    assert entry["round"] == 1
+    assert entry["build"] == "1.4.0-rc.2"
+    assert entry["page"] == CHECKLIST
+    assert entry["answers"] == {"t1": {"v": "yes", "n": ""}}
+    assert "opened" in entry and "closed" in entry
+    assert "Round 1" in entry["results_text"] and "[t1] YES" in entry["results_text"]
+    meta = json.loads((root / "_saved" / "_round-meta" / f"{NAME}.json").read_text())
+    assert meta == {"round": 2, "build": "1.4.0-rc.3", "reset": "",
+                     "opened": meta["opened"]}
+
+
+def test_round_text_for_a_choices_page_uses_its_labels_and_default():
+    serve = load_serve()
+    src = (html_example("demo") / "backlog.html").read_text()
+    attrs = serve._body_attrs(src)
+    text = serve._results_text("demo/backlog.html", "Demo app backlog", src, attrs,
+                               {"s1": {"v": "start", "n": "Next sprint"}, "s2": {"v": "", "n": "Not before Q3"}}, 1, "")
+    assert "- [s1] START: Export reports as PDF\n    Note: Next sprint\n" in text
+    assert "- [s2] HOLD: Dark theme\n    Note: Not before Q3\n" in text
+    assert "- [s3] HOLD: Single sign-on\n" in text
+    assert "NOT ANSWERED" not in text and "approved" not in text.lower()
+    assert text.endswith("\n1 start · 2 hold\n")
+
+
+def test_round_archived_on_reset_version_change(site):
+    root, base = site
+    page = root / "demo" / "design-review.html"
+    src = page.read_text().replace('<body class="site">', '<body class="site" data-review-reset="v1:s1">')
+    page.write_text(src)
+    key = "review-demo-design-review.html"
+    assert request(base + f"/_save/{key}.json", "PUT", '{"s1": {"v": "yes", "n": ""}}')[0] == 204
+    assert not (root / "_saved" / "history" / key).exists()
+    page.write_text(src.replace('data-review-reset="v1:s1"', 'data-review-reset="v2:s1"'))
+    assert request(base + f"/_save/{key}.json", "PUT", '{"s1": {"v": "yes", "n": ""}, "_prev": {}}')[0] == 204
+    files = list((root / "_saved" / "history" / key).glob("*.json"))
+    assert len(files) == 1
+    entry = json.loads(files[0].read_text())
+    assert entry["round"] == 1
+    assert entry["build"] == ""
+
+
+def test_round_history_listing_and_entry(site):
+    root, base = site
+    request(base + f"/_save/{NAME}.json", "PUT", '{"t1": {"v": "yes", "n": ""}}')
+    bump_build(root, "1.4.0-rc.3")
+    request(base + f"/_save/{NAME}.json", "PUT", '{"t1": {"v": "yes", "n": ""}}')
+    status, body, _ = request(base + f"/_history/{NAME}/")
+    assert status == 200
+    listing = json.loads(body)
+    assert listing["page_removed"] is False
+    assert len(listing["rounds"]) == 1
+    assert listing["rounds"][0]["round"] == 1
+    assert listing["rounds"][0]["count"] == "1 of 1 Yes"
+    fname = listing["rounds"][0]["file"]
+    status, body, headers = request(base + f"/_history/{NAME}/{fname}")
+    assert status == 200
+    assert headers.get("Cache-Control") == "no-store"
+    assert json.loads(body)["round"] == 1
+
+
+def test_history_listing_for_a_choices_page_counts_each_choice(site):
+    root, base = site
+    key = "review-demo-backlog.html"
+    page = root / "demo" / "backlog.html"
+    page.write_text(page.read_text().replace('<body class="site"', '<body class="site" data-build="b1"', 1))
+    request(base + f"/_save/{key}.json", "PUT", '{"s1": {"v": "start", "n": ""}, "s2": {"v": "", "n": "Not before Q3"}}')
+    page.write_text(page.read_text().replace('data-build="b1"', 'data-build="b2"'))
+    request(base + f"/_save/{key}.json", "PUT", '{}')
+    listing = json.loads(request(base + f"/_history/{key}/")[1])
+    assert listing["rounds"][0]["count"] == "1 start · 2 hold"
+
+
+def test_history_listing_for_unknown_page_is_empty(site):
+    _, base = site
+    status, body, _ = request(base + "/_history/never-saved/")
+    assert status == 200
+    assert json.loads(body) == {"page_removed": False, "rounds": []}
+
+
+@pytest.mark.parametrize("path", [
+    "/_history/../_saved/" + NAME + ".json",
+    "/_history/" + NAME + "/../../_round-meta/x.json",
+    "/_history/Bad/",
+    "/_history/" + NAME + "/not-a-real-entry.json",
+    "/_history/" + NAME,
+])
+def test_history_rejects_bad_paths(site, path):
+    _, base = site
+    assert request(base + path)[0] == 404
+
+
+def test_saved_history_never_served_directly(site):
+    root, base = site
+    request(base + f"/_save/{NAME}.json", "PUT", '{"t1": {"v": "yes", "n": ""}}')
+    bump_build(root, "1.4.0-rc.3")
+    request(base + f"/_save/{NAME}.json", "PUT", '{"t1": {"v": "yes", "n": ""}}')
+    fn = next((root / "_saved" / "history" / NAME).glob("*.json"))
+    rel = fn.relative_to(root)
+    assert request(base + "/" + str(rel))[0] == 404
+    meta_rel = (root / "_saved" / "_round-meta" / f"{NAME}.json").relative_to(root)
+    assert request(base + "/" + str(meta_rel))[0] == 404
+
+
+def test_round_close_by_hand(site):
+    root, base = site
+    request(base + f"/_save/{NAME}.json", "PUT", '{"t1": {"v": "yes", "n": ""}}')
+    status, body, _ = request(base + "/_round-close", "POST", json.dumps({"name": NAME, "results_text": "custom text"}))
+    assert status == 200, body
+    out = json.loads(body)
+    assert out["round"] == 1
+    entry = json.loads((root / "_saved" / "history" / NAME / out["file"]).read_text())
+    assert entry["results_text"] == "custom text"
+    assert entry["build"] == "1.4.0-rc.2"
+    meta = json.loads((root / "_saved" / "_round-meta" / f"{NAME}.json").read_text())
+    assert meta["round"] == 2
+    assert meta["build"] == "1.4.0-rc.2"
+
+
+@pytest.mark.parametrize(
+    ("body", "code"),
+    [
+        ({"name": "not-a-page"}, 404),
+        ({"name": "review-demo-design-review.html"}, 404),
+        ({"name": "Bad"}, 400),
+        ({}, 400),
+    ],
+    ids=["unknown-page", "nothing-saved-yet", "bad-name", "missing-name"],
+)
+def test_round_close_rejects(site, body, code):
+    _, base = site
+    assert request(base + "/_round-close", "POST", json.dumps(body))[0] == code
+
+
+def test_stale_keeps_history_and_marks_page_removed(site):
+    root, base = site
+    request(base + f"/_save/{NAME}.json", "PUT", '{"t1": {"v": "yes", "n": ""}}')
+    bump_build(root, "1.4.0-rc.3")
+    request(base + f"/_save/{NAME}.json", "PUT", '{"t1": {"v": "yes", "n": ""}}')
+    status, _, _ = request(base + "/_stale", "POST", json.dumps({"folder": "demo", "page": "signoff-checklist.html"}))
+    assert status == 200
+    status, body, _ = request(base + f"/_history/{NAME}/")
+    listing = json.loads(body)
+    assert listing["page_removed"] is True
+    assert len(listing["rounds"]) == 1
+
+
+def test_prune_old_never_touches_saved_or_history(tmp_path):
+    serve = load_serve()
+    hist = tmp_path / "_saved" / "history" / "some-page" / "_old"
+    hist.mkdir(parents=True)
+    f = hist / "ancient.json"
+    f.write_text("{}")
+    past = time.time() - 30 * 86400
+    os.utime(f, (past, past))
+    (tmp_path / "demo").mkdir()
+    removed = serve.prune_old(str(tmp_path), str(tmp_path / "_saved"), 7)
+    assert removed == []
+    assert f.exists()
+
+
+def test_page_key_matches_review_js_sanitising():
+    serve = load_serve()
+    assert serve.page_key("review:/demo/signoff-checklist.html") == "review-demo-signoff-checklist.html"
+    assert serve.page_key("") == "page"
+    assert serve.page_key("A B/c") == "a-b-c"

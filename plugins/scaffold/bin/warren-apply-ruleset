@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# Apply a branch ruleset to a repo, or an org-level ruleset to an org. Idempotent: the named
+# ruleset is created when absent and updated in place when present.
+#
+#   warren-apply-ruleset [--print] [--scaffold-dir <dir>] <owner/repo> [ruleset.json] [--require <check>]...
+#   warren-apply-ruleset --org <org> [ruleset.json]
+#
+# Repo ruleset: the owner's scaffold/ruleset.json when it has one, otherwise
+# templates/governance/rulesets/branch-default.json. On the default, an owner whose
+# scaffold.conf sets release-app-id gets that GitHub App as a bypass actor, so its Release
+# Manager can push the [skip ci] commit. --require adds a required status check (the job's
+# display name as GitHub reports it), creating the rule when the ruleset has none. --print
+# writes the final ruleset to stdout and calls no API. The repo also gets the merge policy:
+# squash only, auto-merge on, head branch deleted on merge.
+#
+# Org ruleset (--org): templates/governance/rulesets/org-all-repos.json by default; the
+# org-v-tags-*.json files are the tag rulesets. Needs the admin:org scope.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+SCAFFOLD_ROOT="$(dirname "$here")"
+# shellcheck source=../lib/scaffold.sh
+source "$SCAFFOLD_ROOT/lib/scaffold.sh"
+RS="$GOV/rulesets"
+
+PRINT=0; REPO=""; JSON=""; ORGLEVEL=""; REQUIRE=()
+SCAFFOLD_DIR_FLAG="${SCAFFOLD_DIR_FLAG:-}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --print) PRINT=1 ;;
+    --org) ORGLEVEL="${2:?--org needs an org}"; shift ;;
+    --require) REQUIRE+=("${2:?--require needs a check name}"); shift ;;
+    --scaffold-dir) SCAFFOLD_DIR_FLAG="${2:?--scaffold-dir needs a folder}"; shift ;;
+    -*) echo "unknown option: $1" >&2; exit 2 ;;
+    *) if [ -z "$ORGLEVEL" ] && [ -z "$REPO" ]; then REPO="$1"; elif [ -z "$JSON" ]; then JSON="$1"; else echo "unexpected arg: $1" >&2; exit 2; fi ;;
+  esac
+  shift
+done
+export SCAFFOLD_DIR_FLAG
+
+name_of() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["name"])' "$1"; }
+
+if [ -n "$ORGLEVEL" ]; then
+  JSON="${JSON:-$RS/org-all-repos.json}"
+  [ -f "$JSON" ] || { echo "ruleset file not found: $JSON" >&2; exit 1; }
+  if [ "$PRINT" -eq 1 ]; then cat "$JSON"; exit 0; fi
+  NAME="$(name_of "$JSON")"
+  ID="$(gh api "orgs/$ORGLEVEL/rulesets" --jq ".[]|select(.name==\"$NAME\")|.id" 2>/dev/null | head -1)"
+  if [ -n "$ID" ]; then
+    gh api -X PUT "orgs/$ORGLEVEL/rulesets/$ID" --input "$JSON" >/dev/null
+    echo "$ORGLEVEL: updated org ruleset '$NAME' (#$ID)"
+  else
+    gh api -X POST "orgs/$ORGLEVEL/rulesets" --input "$JSON" >/dev/null
+    echo "$ORGLEVEL: created org ruleset '$NAME'"
+  fi
+  exit 0
+fi
+
+[ -n "$REPO" ] || { echo "usage: warren-apply-ruleset [--print] <owner/repo> [ruleset.json] [--require <check>]... | --org <org> [ruleset.json]" >&2; exit 2; }
+org_use "${REPO%%/*}"
+APP=""
+if [ -z "$JSON" ]; then
+  JSON="$(org_ruleset)"
+  if [ -z "$JSON" ]; then JSON="$RS/branch-default.json"; APP="$(org_setting release-app-id)"; fi
+fi
+[ -f "$JSON" ] || { echo "ruleset file not found: $JSON" >&2; exit 1; }
+
+FINAL="$(mktemp)"; trap 'rm -f "$FINAL"' EXIT
+APP="$APP" python3 - "$JSON" ${REQUIRE[@]+"${REQUIRE[@]}"} > "$FINAL" <<'PY'
+import json, os, sys
+d = json.load(open(sys.argv[1]))
+app = os.environ.get("APP", "")
+if app:
+    actors = d.setdefault("bypass_actors", [])
+    if not any(a.get("actor_type") == "Integration" and str(a.get("actor_id")) == app for a in actors):
+        actors.append({"actor_id": int(app), "actor_type": "Integration", "bypass_mode": "always"})
+extra = sys.argv[2:]
+if extra:
+    rule = next((r for r in d["rules"] if r["type"] == "required_status_checks"), None)
+    if rule is None:
+        rule = {"type": "required_status_checks", "parameters": {
+            "strict_required_status_checks_policy": True,
+            "do_not_enforce_on_create": False,
+            "required_status_checks": []}}
+        d["rules"].append(rule)
+    checks = rule["parameters"]["required_status_checks"]
+    for name in extra:
+        if all(c["context"] != name for c in checks):
+            # 15368 is GitHub Actions' app id, as the API reports it on checks the runner posts.
+            checks.append({"context": name, "integration_id": 15368})
+json.dump(d, sys.stdout, indent=2, ensure_ascii=False)
+print()
+PY
+if [ "$PRINT" -eq 1 ]; then cat "$FINAL"; exit 0; fi
+
+NAME="$(name_of "$FINAL")"
+ID="$(gh api "repos/$REPO/rulesets" --jq ".[]|select(.name==\"$NAME\")|.id" 2>/dev/null | head -1)"
+if [ -n "$ID" ]; then
+  gh api -X PUT "repos/$REPO/rulesets/$ID" --input "$FINAL" >/dev/null
+  echo "$REPO: updated ruleset '$NAME' (#$ID)"
+else
+  gh api -X POST "repos/$REPO/rulesets" --input "$FINAL" >/dev/null
+  echo "$REPO: created ruleset '$NAME'"
+fi
+
+# The merge policy isn't expressible in a ruleset, so it's set on the repo.
+gh repo edit "$REPO" --enable-auto-merge --enable-squash-merge --enable-merge-commit=false \
+  --enable-rebase-merge=false --delete-branch-on-merge >/dev/null
+echo "$REPO: merge policy set (squash only, auto-merge on, delete branch on merge)"

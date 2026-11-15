@@ -1,0 +1,4 @@
+# Shared workflows a claude-code repo does not get (one file name per line).
+# job-golic.yaml needs Go, go-task and a licence Taskfile; a bash add-on has
+# none of them, so the job could only fail.
+job-golic.yaml

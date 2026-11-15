@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# warren-yes <owner/repo> <n> [n...]
+# Records a standing Yes the owner gave in words, so the merge-yes gate lets `gh pr merge` through
+# for 7 days. The marker is ~/.claude/warren/merge-yes/<owner>__<repo>__<n>.
+set -u
+[ "$#" -ge 2 ] || { echo "usage: warren-yes <owner/repo> <n> [n...]" >&2; exit 2; }
+repo=$1; shift
+[[ "$repo" =~ ^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$ ]] || { echo "warren-yes: bad repo '$repo'" >&2; exit 2; }
+owner=${BASH_REMATCH[1]} name=${BASH_REMATCH[2]}
+dir="$HOME/.claude/warren/merge-yes"
+mkdir -p "$dir" || exit 1
+for n in "$@"; do
+  [[ "$n" =~ ^[0-9]+$ ]] || { echo "warren-yes: bad PR number '$n'" >&2; exit 2; }
+  touch "$dir/${owner}__${name}__$n" || exit 1
+  echo "Yes recorded for $repo#$n"
+done

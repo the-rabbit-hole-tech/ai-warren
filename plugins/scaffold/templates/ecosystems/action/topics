@@ -1,0 +1,3 @@
+# Ecosystem base GitHub topics for action repos, applied at scaffold time.
+# Domain topics (e.g. mqtt, amqp, billing) are per-repo and added by the owner.
+github-actions

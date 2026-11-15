@@ -1,0 +1,45 @@
+name: Plugin Checks
+# Pull requests only, and not while the PR is a draft. One job holds the plugin checks:
+# shellcheck, the shell tests (with the commit-making guard tests, since a GitHub runner is a
+# throwaway sandbox) and `claude plugin validate --strict` on the marketplace and each plugin.
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+jobs:
+  checks:
+    name: 🧩 Plugin Checks
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      # Pinned to the version the plugins are built against, so a CLI release can't
+      # change the validator under a green tree. This is a CLI install, not a repo
+      # dependency: its postinstall puts the platform binary in place, so scripts stay
+      # on here (no repo hooks are involved). It goes into a prefix the job owns, not
+      # the global one: the global prefix on a runner may not be writable
+      # (EACCES), and its bin directory is put on PATH for the steps below.
+      - name: Install the plugin validator
+        env:
+          VERSION: 2.1.318
+        run: |
+          npm install --prefix "${RUNNER_TEMP}/validator" "@anthropic-ai/claude-code@${VERSION}"
+          echo "${RUNNER_TEMP}/validator/node_modules/.bin" >> "${GITHUB_PATH}"
+          "${RUNNER_TEMP}/validator/node_modules/.bin/claude" --version
+      - name: 🐚 ShellCheck
+        run: |
+          # Every shell script in a plugin's bin/, picked by its shebang, so the Python
+          # scripts and data/ are left out and no new script slips past.
+          mapfile -t bins < <(grep -lsE '^#!(/usr/bin/env (ba)?sh|/bin/(ba)?sh)' plugins/*/bin/*)
+          shellcheck -S warning plugins/*/hooks/*.sh "${bins[@]}" plugins/*/git-hooks/_dispatch
+          shellcheck -S warning -e SC2034,SC2154,SC1091 tests/*.sh tests/*/*.sh
+      - name: 🧪 Shell tests
+        env:
+          WARREN_TEST_SANDBOX: "1"
+          WARREN_REQUIRE_CLAUDE: "1"
+        run: bash tests/run.sh

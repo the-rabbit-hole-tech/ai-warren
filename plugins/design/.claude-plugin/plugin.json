@@ -1,0 +1,7 @@
+{
+  "name": "design",
+  "version": "1.0.0",
+  "description": "The design and review rules, loaded per step: brainstorming, plans and specs, section-by-section reviews, design sessions and new UI.",
+  "author": { "name": "The ai-warren Authors" },
+  "license": "Apache-2.0"
+}

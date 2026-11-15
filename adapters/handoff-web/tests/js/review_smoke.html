@@ -1,0 +1,437 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>smoke harness</title></head><body>
+<!-- Smoke tests for review.js and theme.js in a real browser, run by tests/test_review_smoke.py. Each
+     test loads its own copy of a page (so saved answers never leak between tests) in a same-origin
+     frame, clicks like the owner would, and the results land in #out for Chrome's --dump-dom. -->
+<iframe id="f" style="width:1000px;height:800px"></iframe>
+<pre id="out">pending</pre>
+<script>
+const results = {};
+const f = document.getElementById("f");
+const d = () => f.contentDocument, w = () => f.contentWindow;
+const tick = ms => new Promise(r => setTimeout(r, ms));
+async function until(cond, what) {
+  for (let i = 0; i < 400; i++) { try { if (cond()) return; } catch (e) {} await tick(25); }
+  throw new Error("timed out waiting for " + what);
+}
+function fail(msg) { throw new Error(msg); }
+const ok = (v, msg) => { if (!v) fail(msg || "expected truthy"); };
+const eq = (a, b, msg) => { if (a !== b) fail((msg ? msg + ": " : "") + JSON.stringify(a) + " !== " + JSON.stringify(b)); };
+const match = (s, re, msg) => { if (!re.test(s)) fail((msg ? msg + ": " : "") + JSON.stringify(s) + " !~ " + re); };
+async function t(name, fn) {
+  try { await fn(); results[name] = "ok"; } catch (e) { results[name] = "FAIL " + String(e && e.stack || e).split("\n").slice(0, 3).join(" | "); }
+}
+function stub() {
+  const win = w();
+  win.alert = () => {}; win.confirm = () => true; win.prompt = () => "stuck";
+  Object.defineProperty(win.navigator, "clipboard", { configurable: true, value: { writeText: async s => { win.__clip = s; } } });
+}
+async function load(path) {
+  await new Promise(r => { f.onload = r; f.src = path; });
+  await until(() => w().siteReview && d().querySelector(".rvbar .cnt").textContent, "review.js on " + path);
+  stub();
+  return { win: w(), doc: d(), bar: d().querySelector(".rvbar") };
+}
+const click = el => el.dispatchEvent(new (w().MouseEvent)("click", { bubbles: true }));
+const saved = () => until(() => !w().siteReview.unsaved(), "the save");
+// Yes now asks first: press it, then Confirm. The item locks and its row folds away.
+async function confirmYes(btn) {
+  click(btn);
+  const g = btn.closest(".rv").querySelector(".confirm-yes"); ok(g, "Yes opens the confirm step");
+  click(g.querySelector(".confirm-ok"));
+}
+
+(async () => {
+  await t("backlog: choices start not picked, bar dark, picker says Not picked", async () => {
+    const { doc, bar } = await load("/demo/sm-backlog-1.html");
+    const n = doc.querySelectorAll(".rv.choice").length; ok(n > 0);
+    ok(!bar.classList.contains("all-done"));
+    match(bar.querySelector(".cnt").textContent, new RegExp("^0 of " + n + " picked"));
+    eq(bar.querySelector(".ids-l").textContent, "Not picked");
+    eq(bar.querySelector(".ids-n").textContent, "(" + n + ")");
+    ok(doc.querySelector(".rv .seg button.def").textContent.includes("(default)"));
+  });
+  await t("backlog: picking every item (Hold included) turns the bar green", async () => {
+    const { win, doc, bar } = await load("/demo/sm-backlog-2.html");
+    const segs = Array.from(doc.querySelectorAll(".rv.choice .seg"));
+    segs.forEach((g, i) => click(g.querySelectorAll("button")[i === 0 ? 0 : 1]));
+    ok(bar.classList.contains("all-done"), bar.querySelector(".cnt").textContent);
+    ok(!bar.classList.contains("approved"));
+    match(bar.querySelector(".cnt").textContent, /^All \d+ picked · 1 start · \d+ hold/);
+    await saved();
+    const box = await (await fetch(win.siteReview.saveUrl, { cache: "no-store" })).json();
+    eq(box.s1.v, "start");
+    const r = win.siteReview.results(); match(r, /- \[s1\] START: /); match(r, /\n1 start · \d+ hold\n/);
+  });
+  await t("backlog: clicking the picked choice again returns it to the default", async () => {
+    const { doc, bar } = await load("/demo/sm-backlog-3.html");
+    const b = doc.querySelector(".rv.choice .seg button");
+    click(b); eq(b.getAttribute("aria-pressed"), "true");
+    click(b); eq(b.getAttribute("aria-pressed"), "false");
+    match(bar.querySelector(".cnt").textContent, /^0 of/);
+  });
+  await t("review page: segmented answers, card follows answer, green then approved", async () => {
+    const { win, doc, bar } = await load("/demo/sm-review-1.html");
+    const cards = Array.from(doc.querySelectorAll(".rvcard")); ok(cards.length >= 4, "cards " + cards.length);
+    ok(cards[0].querySelector(":scope > .rvhead .rid"));
+    eq(bar.querySelector(".ids-l").textContent, "Open IDs");
+    const yes = c => c.querySelector('.seg button[data-v="yes"]'), no = c => c.querySelector('.seg button[data-v="no"]');
+    click(no(cards[0]));
+    eq(cards[0].dataset.answer, "no");
+    eq(cards[0].querySelector(".rvhead .st").textContent, "No");
+    ok(!cards[0].querySelector(".notel").hidden);
+    for (const c of cards.slice(1)) await confirmYes(yes(c));
+    ok(bar.classList.contains("all-done")); ok(!bar.classList.contains("approved"));
+    match(bar.querySelector(".cnt").textContent, /^All \d+ answered · ready to copy/);
+    await confirmYes(yes(cards[0]));
+    ok(bar.classList.contains("approved"));
+    match(bar.querySelector(".cnt").textContent, /^APPROVED · all \d+ Yes/);
+    match(win.siteReview.results(), /APPROVED: every item is Yes\./);
+  });
+  await t("review page: Changes needs a note; blocker rings the bar; copy blockers", async () => {
+    const { win, doc, bar } = await load("/demo/sm-review-2.html");
+    const c = doc.querySelector(".rvcard");
+    click(c.querySelector('.seg button[data-v="chg"]'));
+    ok(c.querySelector(".rv").classList.contains("empty"));
+    ok(bar.querySelector(".ids-n").textContent.length);
+    click(c.querySelector(".blocker-btn")); await tick(50);
+    ok(bar.classList.contains("has-blocker"));
+    eq(bar.querySelector(".bkr").textContent, "1 BLOCKER");
+    ok(c.classList.contains("is-blocker"));
+    click(bar.querySelector(".copy-blockers")); await tick(50);
+    match(win.__clip, /^BLOCKER: .*\n- \[r1\] .*\n {4}Note: stuck\n$/);
+  });
+  await t("review page: picker filters by words and Enter jumps", async () => {
+    const { win, bar } = await load("/demo/sm-review-3.html");
+    click(bar.querySelector(".ids"));
+    const pick = bar.querySelector(".rvids"); ok(!pick.hidden);
+    const inp = pick.querySelector("input"); inp.value = "web app"; inp.dispatchEvent(new win.Event("input"));
+    eq(pick.querySelectorAll(".rvids-list a").length, 1);
+    match(pick.querySelector(".rvids-h").textContent, /\d+ open · showing 1$/);
+    inp.value = "zzzz"; inp.dispatchEvent(new win.Event("input"));
+    ok(pick.querySelector(".nomatch"));
+    inp.value = ""; inp.dispatchEvent(new win.Event("input"));
+    inp.dispatchEvent(new win.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    ok(pick.querySelectorAll(".rvids-list a")[1].classList.contains("on"));
+    inp.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    ok(pick.hidden);
+  });
+  await t("saved answers load and render; save failure shows amber", async () => {
+    const { win, doc, bar } = await load("/demo/sm-saved.html");
+    const c = doc.querySelector(".rvcard"); eq(c.dataset.answer, "yes");
+    eq(c.querySelector('.seg button[data-v="yes"]').getAttribute("aria-pressed"), "true");
+    win.fetch = async (u, o = {}) => { if (o.method === "PUT") throw new Error("down"); return { ok: false, status: 500 }; };
+    click(c.querySelector('.seg button[data-v="no"]'));
+    await until(() => bar.classList.contains("save-bad"), "the failed save");
+    eq(bar.querySelector(".svst").textContent, "Not saved · retrying");
+    eq(win.siteReview.unsaved(), true);
+  });
+  await t("unified page: group chips and total still count", async () => {
+    const { doc } = await load("/demo/sm-unified/");
+    const chip = doc.querySelector("summary [data-open-chip]"); ok(chip); const n0 = parseInt(chip.textContent, 10);
+    await confirmYes(doc.querySelector('.item .seg button[data-v="yes"]'));
+    eq(parseInt(chip.textContent, 10), n0 - 1);
+    eq(doc.querySelector(".open-total").textContent, "2");
+    ok(doc.querySelector(".grp-copy"));
+  });
+  await t("how to test: steps sit inline under each item, collapsed, open in place with Copy buttons, no pop-out", async () => {
+    const { win, doc } = await load("/demo/sm-howto.html");
+    let popped = 0; win.open = () => { popped++; return null; };
+    ok(!doc.querySelector(".howto-btn"), "no pop-out button");
+    const hows = doc.querySelectorAll("details.howto"); eq(hows.length, 2, "one per item");
+    ok(!hows[0].open && !hows[1].open, "collapsed to start");
+    match(hows[0].querySelector("summary").textContent, /How to test/); match(hows[0].querySelector("summary").textContent, /1\.2\.3/);
+    ok(hows[0].querySelector(".howto-body pre"), "the steps"); ok(hows[0].querySelector(".copy-cmd"), "a Copy button");
+    ok(hows[1].querySelector(".howto-body a"), "the converted .howto block");
+    click(hows[0].querySelector("summary")); ok(hows[0].open, "opens in place"); eq(popped, 0, "no window opens");
+    click(hows[0].querySelector(".copy-cmd")); eq(win.__clip, "./install.sh");
+    eq(win.siteReview.results().includes("How to test"), false, "steps stay out of Copy results");
+  });
+
+  await t("synthetic: h2 items, skip locks, approved hidden, blocked, question", async () => {
+    const { win, doc, bar } = await load("/demo/sm-synth.html");
+    eq(doc.querySelectorAll(".rv").length, 5);
+    ok(doc.querySelector(".rvdone"));
+    eq(doc.querySelector("#rv-s4 .st").textContent, "Blocked by s2");
+    ok(doc.querySelector("header.top .crumb"));
+    match(bar.querySelector(".cnt").textContent, /^0 of 2 answered · 1 blocked · 1 approved and hidden · 1 question unanswered/);
+    click(doc.querySelector('#rv-s3 .seg button[data-v="skip"]'));
+    eq(doc.querySelector("#rv-s3 .st").textContent, "Skipped (locked)");
+    ok(doc.querySelector('#rv-s3 .seg button[data-v="yes"]').disabled);
+    await confirmYes(doc.querySelector('#rv-s2 .seg button[data-v="yes"]'));
+    ok(bar.classList.contains("approved"), bar.querySelector(".cnt").textContent);
+    const r = win.siteReview.results();
+    match(r, /- \[s1\] YES: One/); match(r, /- \[s3\] SKIPPED \(locked\): Three/);
+    match(r, /- \[s4\] BLOCKED by s2, NOT ANSWERED: Four/); match(r, /Q s5: \(no answer\)/);
+  });
+  await t("theme toggle sets data-theme, saves it, Auto clears it; survives blocked storage", async () => {
+    const inject = async () => {
+      const s = d().createElement("script"); s.src = "/_site/theme.js"; d().head.appendChild(s);
+      await until(() => w().siteTheme, "theme.js"); await tick(50);
+    };
+    const plain = async path => { await new Promise(r => { f.onload = r; f.src = path; }); };
+    localStorage.removeItem("site-theme");
+    await plain("/demo/sm-theme-1.html"); await inject();
+    const tg = d().querySelector("header.top .theme-tg"); ok(tg, "toggle mounted in the header");
+    const btn = v => tg.querySelector('[data-theme="' + v + '"]');
+    eq(btn("auto").getAttribute("aria-pressed"), "true");
+    ok(!d().documentElement.hasAttribute("data-theme"));
+    click(btn("dark"));
+    eq(d().documentElement.getAttribute("data-theme"), "dark");
+    eq(w().localStorage.getItem("site-theme"), "dark");
+    eq(btn("dark").getAttribute("aria-pressed"), "true");
+    click(btn("light")); eq(d().documentElement.getAttribute("data-theme"), "light");
+    click(btn("auto")); ok(!d().documentElement.hasAttribute("data-theme")); eq(w().localStorage.getItem("site-theme"), null);
+    // A saved choice applies on load; a page without a header gets the floating toggle.
+    localStorage.setItem("site-theme", "dark");
+    await plain("/demo/sm-theme-2.html"); await inject();
+    eq(d().documentElement.getAttribute("data-theme"), "dark");
+    ok(d().querySelector(".theme-tg.floating"));
+    localStorage.removeItem("site-theme");
+    // Storage that throws: still switches for this page.
+    await plain("/demo/sm-theme-3.html");
+    Object.defineProperty(w(), "localStorage", { configurable: true, get() { throw new Error("blocked"); } });
+    await inject();
+    click(d().querySelector('[data-theme="dark"]'));
+    eq(d().documentElement.getAttribute("data-theme"), "dark");
+  });
+  await t("finished page: green bar and toast point back to the folder; Copy results returns after 1.5 s", async () => {
+    const { doc, bar } = await load("/demo/sm-fin-1.html");
+    const back = bar.querySelector(".back"); ok(back.hidden);
+    for (const b of doc.querySelectorAll('.seg button[data-v="yes"]')) await confirmYes(b);
+    ok(bar.classList.contains("approved")); ok(!back.hidden);
+    eq(back.getAttribute("href"), "/demo/"); eq(back.textContent, "← Back to Demo pages");
+    const toast = doc.querySelector(".site-toast.act"); ok(toast, "toast"); eq(toast.querySelector("a").getAttribute("href"), "/demo/");
+    click(bar.querySelector(".copy")); await tick(400);
+    eq(w().location.pathname, "/demo/sm-fin-1.html", "not before 1.5 s");
+    await until(() => w().location.pathname === "/demo/", "going back to the folder");
+  });
+  await t("finished page: typing or moving after Copy results stays", async () => {
+    const { win, doc, bar } = await load("/demo/sm-fin-2.html");
+    doc.querySelectorAll('.seg button[data-v="no"]').forEach(b => click(b));
+    ok(bar.classList.contains("all-done")); ok(!bar.classList.contains("approved"));
+    click(bar.querySelector(".copy")); await tick(100);
+    win.dispatchEvent(new win.KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    await tick(1700);
+    eq(w().location.pathname, "/demo/sm-fin-2.html");
+    match(doc.querySelector(".site-toast.act").textContent, /Staying on this page/);
+  });
+  await t("unfinished page: Copy results stays put and no back link", async () => {
+    const { doc, bar } = await load("/demo/sm-fin-3.html");
+    await confirmYes(doc.querySelector('.seg button[data-v="yes"]'));
+    ok(bar.querySelector(".back").hidden);
+    click(bar.querySelector(".copy")); await tick(1800);
+    eq(w().location.pathname, "/demo/sm-fin-3.html");
+  });
+  await t("confirm (HTML page): Yes asks first, Cancel and Escape leave it, Confirm saves and folds the row, the note stays editable", async () => {
+    const { win, doc, bar } = await load("/demo/sm-lock-1.html");
+    let dialogs = 0; win.confirm = () => { dialogs++; return true; }; win.prompt = () => { dialogs++; return ""; };
+    const card = id => doc.querySelector("#rv-" + id).closest(".rvcard"), yesB = id => card(id).querySelector('.seg button[data-v="yes"]');
+    const c = card("r1");
+    click(yesB("r1"));
+    const g = c.querySelector(".confirm-yes"); ok(g, "the confirm step opens on the item");
+    eq(g.getAttribute("role"), "group"); ok(doc.getElementById(g.getAttribute("aria-labelledby")), "it is labelled");
+    ok(doc.activeElement === g.querySelector(".confirm-ok"), "focus moves to the confirm step");
+    eq(c.dataset.answer, "", "nothing answered yet"); eq(win.siteReview.state().r1, undefined);
+    click(g.querySelector(".confirm-cancel")); ok(!c.querySelector(".confirm-yes"));
+    ok(doc.activeElement === yesB("r1"), "Cancel returns focus to Yes");
+    click(yesB("r1"));
+    c.querySelector(".confirm-yes").dispatchEvent(new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    ok(!c.querySelector(".confirm-yes"), "Escape closes it"); eq(c.dataset.answer, "");
+    click(yesB("r1")); c.querySelector(".confirm-yes textarea").value = "Matches the plan";
+    click(c.querySelector(".confirm-ok"));
+    ok(c.classList.contains("settled") && c.classList.contains("is-confirmed"), "the row folds like an earlier-round Yes");
+    eq(c.querySelector(".rvhead .st").textContent, "Yes (locked)");
+    eq(win.getComputedStyle(c.querySelector(".rv")).display, "none", "controls folded away");
+    eq(c.querySelector(".locked-answer").textContent, "Matches the plan");
+    ok(doc.activeElement === c.querySelector(".settled-tg"), "focus lands on the locked item");
+    match(c.querySelector(".lock-live").textContent, /r1 confirmed and locked/);
+    const st = win.siteReview.state().r1; eq(st.v, "yes"); eq(st.n, "Matches the plan"); eq(st.confirmed, true);
+    await saved();
+    const saved1 = await (await fetch(win.siteReview.saveUrl, { cache: "no-store" })).json();
+    eq(saved1.r1.confirmed, true, "saved on the server"); eq(saved1.r1.n, "Matches the plan");
+    click(c.querySelector(".settled-tg"));
+    for (const b of c.querySelectorAll(".seg button")) ok(b.disabled, b.dataset.v + " is disabled");
+    const ta = c.querySelector(".notel textarea"); ok(!ta.disabled, "the note is editable");
+    ta.value = "Changed my note"; ta.dispatchEvent(new win.Event("input", { bubbles: true })); await saved();
+    const saved2 = await (await fetch(win.siteReview.saveUrl, { cache: "no-store" })).json();
+    eq(saved2.r1.n, "Changed my note"); eq(saved2.r1.confirmed, true, "the lock survives a note edit"); eq(saved2.r1.v, "yes");
+    match(win.siteReview.results(), /- \[r1\] YES \(locked\): 1\. A module repo\n    Note: Changed my note/);
+    eq(dialogs, 0, "no browser dialog");
+    const d2 = (await load("/demo/sm-lock-1.html")).doc;
+    ok(d2.querySelector("#rv-r1").closest(".rvcard").classList.contains("is-confirmed"), "locked again after a reload");
+    eq(d2.querySelector("#rv-r1 .notel textarea").value, "Changed my note");
+  });
+  await t("reopen (HTML page): a reason is required, then the Yes unlocks and shows why", async () => {
+    const { win, doc, bar } = await load("/demo/sm-lock-2.html");
+    const c = doc.querySelector("#rv-r1").closest(".rvcard");
+    await confirmYes(c.querySelector('.seg button[data-v="yes"]'));
+    click(c.querySelector(".settled-tg")); click(c.querySelector(".reopen-btn"));
+    const g = c.querySelector(".reopen-yes"); ok(g, "the reason form opens"); ok(doc.activeElement === g.querySelector("textarea"), "focus goes to the reason");
+    click(g.querySelector(".confirm-ok")); match(g.querySelector(".confirm-err").textContent, /Say why/);
+    ok(c.classList.contains("is-confirmed"), "still locked");
+    g.querySelector("textarea").value = "I misread it"; g.querySelector("textarea").dispatchEvent(new win.Event("input", { bubbles: true }));
+    click(g.querySelector(".confirm-ok"));
+    ok(!c.classList.contains("is-confirmed") && !c.classList.contains("settled"), "open again");
+    eq(c.querySelector(".rvhead .st").textContent, "Reopened: I misread it");
+    ok(!c.querySelector('.seg button[data-v="yes"]').disabled);
+    await saved();
+    const sv = await (await fetch(win.siteReview.saveUrl, { cache: "no-store" })).json();
+    eq(sv.r1.confirmed, undefined); eq(sv.r1.reopened, "I misread it");
+    await confirmYes(c.querySelector('.seg button[data-v="yes"]'));
+    eq(win.siteReview.state().r1.reopened, undefined, "confirming again clears the reopen reason");
+  });
+  await t("confirm (HTML page): an h2 item with no card locks in place, and Mark unanswered and Clear leave a confirmed Yes alone", async () => {
+    const { win, doc, bar } = await load("/demo/sm-lock-3.html");
+    const box = id => doc.querySelector("#rv-" + id);
+    await confirmYes(box("s1").querySelector('.seg button[data-v="yes"]'));
+    ok(box("s1").classList.contains("confirmed") && box("s1").querySelector(".seg button").disabled, "locked in place");
+    ok(!box("s1").querySelector(".notel textarea").disabled, "note editable");
+    let asked = []; win.confirm = m => { asked.push(m); return true; };
+    click(bar.querySelector(".all-no")); await saved();
+    eq(win.siteReview.state().s1.v, "yes", "Mark unanswered leaves it"); eq(win.siteReview.state().s2.v, "no");
+    click(bar.querySelector(".clear")); await tick(300);
+    eq(win.siteReview.state().s1 && win.siteReview.state().s1.confirmed, true, "Clear leaves a confirmed Yes");
+  });
+  await t("blocker and reopened pills: later paints keep both pills and Add a note still opens", async () => {
+    const { win, doc } = await load("/demo/sm-pills.html");
+    const errs = []; win.addEventListener("error", e => errs.push(e.message));
+    const card = id => doc.querySelector("#rv-" + id).closest(".rvcard");
+    const pills = id => Array.from(card(id).querySelector(":scope > .rvhead").children).filter(x => x.matches("[class^=st]")).map(x => x.textContent);
+    click(card("r1").querySelector(".blocker-btn")); await tick(50);
+    await confirmYes(card("r1").querySelector('.seg button[data-v="yes"]'));
+    await confirmYes(card("r2").querySelector('.seg button[data-v="yes"]'));
+    click(card("r3").querySelector(".add-note"));
+    eq(errs.join(" | "), "", "errors while painting");
+    ok(!card("r3").querySelector(".notel").hidden, "note box opens");
+    eq(JSON.stringify(pills("r1")), JSON.stringify(["Blocker", "Yes (locked)"]));
+    eq(JSON.stringify(pills("r2")), JSON.stringify(["Reopened: fixed in 1.2", "Yes (locked)"]));
+  });
+  await t("diff block: added underlined, removed struck through, unchanged dimmed, item still answers", async () => {
+    const { win, doc } = await load("/demo/sm-diff.html");
+    await until(() => win.getComputedStyle(doc.querySelector(".rvdiff ins")).textDecorationLine.includes("underline"), "site.css on the diff");
+    const cs = el => win.getComputedStyle(doc.querySelector(el));
+    match(cs(".rvdiff ins").textDecorationLine, /underline/, "ins decoration");
+    match(cs(".rvdiff del").textDecorationLine, /line-through/, "del decoration");
+    ok(cs(".rvdiff ins").backgroundColor !== cs(".rvdiff del").backgroundColor, "ins and del backgrounds differ");
+    ok(cs(".rvdiff ins").backgroundColor !== "rgba(0, 0, 0, 0)", "ins has a background");
+    ok(cs(".rvdiff .same").color !== cs(".rvdiff ins").color, "unchanged text is dimmed, not coloured");
+    const code = doc.querySelector(".rvdiff.code p"), lh = parseFloat(win.getComputedStyle(code).lineHeight);
+    ok(code.getBoundingClientRect().height >= 2.5 * lh, "a multi-line diff keeps its line breaks (" + code.getBoundingClientRect().height + "px, line " + lh + "px)");
+    match(win.getComputedStyle(code).fontFamily, /mono|Menlo/i, "a code diff is monospace");
+    const card = doc.querySelector("#rv-d1").closest(".rvcard");
+    ok(card.contains(doc.querySelector(".rvdiff")), "the diff sits inside the item card");
+    await confirmYes(card.querySelector('.seg button[data-v="yes"]'));
+    match(doc.querySelector(".rvbar .cnt").textContent, /1 of 1|APPROVED|All 1/i, "the item answers");
+  });
+  const mode = bar => Array.from(bar.querySelectorAll("button")).filter(b => b.getAttribute("aria-pressed") === "true").map(b => b.dataset.v).join();
+  await t("diff switch: Final hides removed text and un-styles added text, Diff restores both", async () => {
+    const { win, doc } = await load("/demo/sm-diff-2.html");
+    const block = doc.querySelector(".rvdiff"), bar = block.previousElementSibling;
+    await until(() => bar && bar.matches(".rvdiff-mode"), "the switch before the block");
+    const cs = el => win.getComputedStyle(el);
+    const ins = block.querySelector("ins"), del = block.querySelector("del"), same = block.querySelector(".same");
+    const cut = block.querySelectorAll("p")[2];
+    eq(mode(bar), "diff", "starts on Diff");
+    click(bar.querySelector('[data-v="final"]'));
+    eq(mode(bar), "final");
+    ok(block.classList.contains("final"), "block marked final");
+    eq(cs(del).display, "none", "removed words hidden");
+    eq(cs(ins).textDecorationLine, "none", "added words not underlined");
+    eq(cs(ins).backgroundColor, "rgba(0, 0, 0, 0)", "added words have no background");
+    eq(cs(ins).color, cs(ins.parentElement).color, "added words in the text colour");
+    eq(cs(same).color, cs(block).color, "unchanged text no longer dimmed");
+    eq(cs(cut).display, "none", "a fully removed sentence leaves no empty line");
+    eq(block.querySelectorAll("p")[1].textContent.replace(/\s+/g, " "), "The core ran at 1020 Gb/s.", "text itself untouched");
+    click(bar.querySelector('[data-v="diff"]'));
+    eq(mode(bar), "diff");
+    match(cs(ins).textDecorationLine, /underline/, "underline back");
+    match(cs(del).textDecorationLine, /line-through/, "strikethrough back");
+    ok(cs(del).display !== "none" && cs(cut).display !== "none", "removed text back");
+    ok(cs(same).color !== cs(block).color, "unchanged text dimmed again");
+  });
+  await t("diff switch: for all flips every block, goes mixed when one differs, and the view survives a reload", async () => {
+    let { doc } = await load("/demo/sm-diff-3.html");
+    const all = doc.querySelector("main > .rvdiff-all");
+    ok(all, "a for-all switch at the top of main");
+    const blocks = () => Array.from(doc.querySelectorAll(".rvdiff"));
+    eq(blocks().length, 2);
+    click(all.querySelector('[data-v="final"]'));
+    ok(blocks().every(b => b.classList.contains("final")), "every block final");
+    ok(blocks().every(b => mode(b.previousElementSibling) === "final"), "every block switch says Final");
+    eq(mode(all), "final");
+    click(blocks()[0].previousElementSibling.querySelector('[data-v="diff"]'));
+    eq(mode(all), "", "for-all shows neither once blocks differ");
+    click(blocks()[0].previousElementSibling.querySelector('[data-v="final"]'));
+    eq(mode(all), "final", "for-all follows when they agree again");
+    ({ doc } = await load("/demo/sm-diff-3.html"));
+    ok(Array.from(doc.querySelectorAll(".rvdiff")).every(b => b.classList.contains("final")), "Final kept after a reload");
+    eq(doc.querySelectorAll(".rvdiff-mode:not(.rvdiff-all)").length, 2, "one switch per block, no duplicates");
+  });
+  await t("diff switch: a labelled group of buttons, reachable by keyboard, with a visible focus ring", async () => {
+    const { win, doc } = await load("/demo/sm-diff-4.html");
+    const bars = Array.from(doc.querySelectorAll(".rvdiff-mode"));
+    ok(bars.length === 3, "two block switches and one for-all");
+    for (const b of bars) {
+      eq(b.getAttribute("role"), "group");
+      ok(b.getAttribute("aria-label"), "group has a label");
+      for (const x of b.querySelectorAll("button")) {
+        eq(x.tagName, "BUTTON"); eq(x.type, "button"); ok(x.tabIndex === 0, "in the tab order");
+        ok(x.hasAttribute("aria-pressed"), "toggle state exposed");
+      }
+    }
+    const btn = bars[1].querySelector('[data-v="final"]');
+    btn.focus();
+    eq(doc.activeElement, btn, "focusable");
+    await until(() => win.getComputedStyle(btn).outlineStyle !== "none", "focus ring");
+    ok(parseFloat(win.getComputedStyle(btn).outlineWidth) >= 2, "focus ring at least 2px");
+  });
+  await t("mark unanswered: confirm with the count, fill only open items, keep earlier answers and notes, saved", async () => {
+    const { win, doc, bar } = await load("/demo/sm-mark-1.html");
+    const card = id => doc.getElementById("rv-" + id);
+    const seg = (id, v) => card(id).querySelector('.seg button[data-v="' + v + '"]');
+    const ans = id => { const b = card(id).querySelector(".seg button[aria-pressed=true]"); return b ? b.dataset.v : ""; };
+    ok(bar.querySelector(".rvpop.menu .all-yes"), "Mark unanswered Yes in the More menu");
+    eq(bar.querySelector(".rvpop.menu .all-yes").textContent, "Mark unanswered Yes");
+    eq(bar.querySelector(".rvpop.menu .all-no").textContent, "Mark unanswered No");
+    click(seg("r1", "chg")); const ta = card("r1").querySelector("textarea"); ta.value = "keep this note"; ta.dispatchEvent(new win.Event("input"));
+    await confirmYes(seg("r2", "yes"));
+    let asked = [];
+    win.confirm = m => { asked.push(m); return false; };
+    click(bar.querySelector(".all-no"));
+    eq(asked.length, 1); match(asked[0], /^Mark the 2 unanswered items No\?/);
+    eq(ans("r3"), ""); eq(ans("r4"), "");
+    win.confirm = m => { asked.push(m); return true; };
+    click(bar.querySelector(".all-no"));
+    eq(ans("r1"), "chg"); eq(ta.value, "keep this note"); eq(ans("r2"), "yes"); eq(ans("r3"), "no"); eq(ans("r4"), "no");
+    ok(bar.querySelector(".rvpop.menu").hidden, "menu closes");
+    await saved();
+    const box = await (await fetch(win.siteReview.saveUrl, { cache: "no-store" })).json();
+    eq(box.r3.v, "no"); eq(box.r4.v, "no"); eq(box.r1.v, "chg"); eq(box.r1.n, "keep this note"); eq(box.r2.v, "yes");
+    match(win.siteReview.results(), /- \[r4\] NO: /);
+    let alerted = ""; asked = []; win.alert = m => { alerted = m; };
+    click(bar.querySelector(".all-yes"));
+    eq(asked.length, 0); eq(alerted, "Every item already has an answer.");
+    eq(ans("r3"), "no");
+  });
+  await t("mark unanswered: hidden, blocked, locked and question items are left alone", async () => {
+    const { win, doc, bar } = await load("/demo/sm-mark-2.html");
+    const ans = id => { const b = doc.querySelector("#rv-" + id + " .seg button[aria-pressed=true]"); return b ? b.dataset.v : ""; };
+    click(doc.querySelector('#rv-s3 .seg button[data-v="skip"]'));
+    const s1 = ans("s1");
+    const asked = []; win.confirm = m => { asked.push(m); return true; };
+    click(bar.querySelector(".all-yes"));
+    eq(asked.length, 1); match(asked[0], /^Mark the 1 unanswered item Yes\?/);
+    eq(ans("s2"), "yes"); eq(ans("s3"), "skip"); eq(ans("s1"), s1); eq(ans("s4"), "");
+    const q = doc.querySelector(".rv.question textarea"); eq(q.value, "");
+  });
+  await t("mark unanswered: a page of choices only says nothing is unanswered and asks nothing", async () => {
+    const { win, doc, bar } = await load("/demo/sm-mark-3.html");
+    let asked = 0, alerted = ""; win.confirm = () => { asked++; return true; }; win.alert = m => { alerted = m; };
+    click(bar.querySelector(".all-yes"));
+    eq(asked, 0); eq(alerted, "Every item already has an answer.");
+    eq(doc.querySelectorAll(".rv.choice .seg button[aria-pressed=true]").length, 0);
+  });
+})().catch(e => { results.harness = "FAIL " + String(e && e.stack || e); })
+  .finally(() => { document.getElementById("out").textContent = JSON.stringify(results); });
+</script></body></html>

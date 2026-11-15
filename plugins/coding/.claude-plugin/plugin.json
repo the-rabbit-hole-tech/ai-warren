@@ -1,0 +1,7 @@
+{
+  "name": "coding",
+  "version": "1.6.0",
+  "description": "The coding rules as per-step skills: test-first, discipline, docs, logging, health, README style, UI tweaks, the owner's packages, porting, and the Go, Node, Helm, shell and Swift language rules.",
+  "author": { "name": "The ai-warren Authors" },
+  "license": "Apache-2.0"
+}

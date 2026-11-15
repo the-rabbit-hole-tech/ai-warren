@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Write a new org plugin and its marketplace for one GitHub owner from the shipped template.
+#
+#   warren-new-org-plugin <github-owner> --out <new folder> [--author <holder>]
+#
+# The marketplace is named for the lowercased owner and the plugin is warren-org-<owner>, which is
+# how warren-repo-ready finds it. --out must not exist or must be empty. Nothing is pushed.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+TEMPLATE="$(dirname "$here")/templates/org-plugin"
+OWNER=""; OUT=""; AUTHOR=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --out) OUT="${2:?--out needs a folder}"; shift ;;
+    --author) AUTHOR="${2:?--author needs a name}"; shift ;;
+    -*) echo "unknown option: $1" >&2; exit 2 ;;
+    *) [ -z "$OWNER" ] && OWNER="$1" || { echo "one owner only" >&2; exit 2; } ;;
+  esac
+  shift
+done
+[ -n "$OWNER" ] && [ -n "$OUT" ] || { echo "usage: warren-new-org-plugin <github-owner> --out <new folder> [--author <holder>]" >&2; exit 1; }
+[[ "$OWNER" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$ ]] || { echo "not a GitHub owner name: $OWNER" >&2; exit 1; }
+if [ -e "$OUT" ] && [ -n "$(ls -A "$OUT" 2>/dev/null)" ]; then echo "$OUT already has files; pick a new folder" >&2; exit 1; fi
+[ -n "$AUTHOR" ] || AUTHOR="The $OWNER Authors"
+lower="$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')"
+mkdir -p "$OUT"
+( cd "$TEMPLATE" && find . -type f -print0 ) | while IFS= read -r -d '' f; do
+  dest="$OUT/${f#./}"; dest="${dest//__OWNER_LOWER__/$lower}"
+  mkdir -p "$(dirname "$dest")"
+  OWNER="$OWNER" LOWER="$lower" AUTHOR="$AUTHOR" perl -pe 's/__OWNER_LOWER__/$ENV{LOWER}/g; s/__OWNER__/$ENV{OWNER}/g; s/__AUTHOR__/$ENV{AUTHOR}/g' "$TEMPLATE/$f" > "$dest"
+done
+echo "wrote the $OWNER org plugin to $OUT (plugin warren-org-$lower, marketplace $lower)"
+echo "next: edit its rules, push it to a repo you own, then: claude plugin marketplace add $OWNER/<repo>"

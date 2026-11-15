@@ -1,0 +1,254 @@
+# The hand-off site
+
+Served by `_site/serve.py` from this folder, at the host and port in `site.json`. New pages are page files
+(`<folder>/<slug>.json`, written with `page.py`; see `PAGE-FILE.md` and `PAGE-API.md`): the renderer draws them,
+and they need none of the manifest or HTML steps below, which are for HTML pages not converted yet. The operator owns the root,
+`site.json` and `_site/`; each session publishes only into its own folder. Run one server only.
+
+## Mark a page
+
+1. Edit your folder's `_status.json`. The key is the page path inside the folder (`x.html`, `dir/`, `dir/y.html`):
+
+   ```json
+   "review/": { "state": "needs-you", "note": "One line on why.", "chips": ["Decision needed"] }
+   ```
+
+   `state` is `needs-you`, `reference` or `done`. `chips` is optional; `priority` (default 50, lower first)
+   sorts the root list. `first_seen` is added by the script; leave it.
+2. Run `python3 gen-index.py`.
+
+Page files (`<folder>/<slug>.json`, see `PAGE-FILE.md`) need no manifest entry: their card comes from the file
+(`page.py status` sets its state, note, chips and priority), and a folder of only page files has no `_status.json`.
+For a folder with page files, the server builds `/<folder>/`, `/<folder>/history/` and `/` on request, so their
+cards are always current; `gen-index.py` still writes the same pages to disk.
+
+A page that isn't in the manifest shows under "Needs you" with a "Not classified" chip. When a page's item
+completes, set it to `done` and it moves to "Completed". To retire a page, the owner presses Stale.
+
+## Hook a page in
+
+```html
+<link rel="stylesheet" href="/_site/site.css?v=25">
+<script src="/_site/theme.js?v=20"></script>   <!-- in <head>: light / dark before first paint -->
+...
+<script src="/_site/review.js?v=30"></script>   <!-- review pages: just before </body> -->
+```
+
+- `review.js` turns every `<h2>` section (and every `[data-review-question="id" data-title="..."]`) into an
+  item with Yes / No / Changes. It loads `live.js` itself.
+- Body attributes: `data-review-approved="s1,s3"` (Yes from pasted results: hidden, kept in Copy results),
+  `data-review-reopen="s4=reason|s5=reason"`, `data-review-reset="v2:s4,s5"` (bump the version once after a
+  rework; cleared answers are archived in the saved state, not lost), `data-review-blocked="s6=s2"` (greyed,
+  locked and shown as "Blocked by s2" until its blocker is fixed), `data-build="1.2.3"` (shown in How to test and blocker copies).
+- Answers live on the server only, in `_saved/<page-key>.json` through `/_save/` (see `SAVE-API.md`). The
+  page key is `KEY_PREFIX` (top of `review.js`, from `site.json` `key_prefix`) plus the page path,
+  sanitised. Answers an older copy kept in the browser's localStorage under that key are uploaded once,
+  read back, then removed from the browser. Saves are debounced 500 ms and retried; the bar shows
+  "Saved hh:mm" or an amber "Not saved · retrying".
+- Unified page: `python3 _site/build-review.py <folder>` builds `/<folder>/review/` from every needs-you page
+  in its `_status.json`; rerun it after a source page or the manifest changes. Each source page is one
+  collapsed group (one open at a time) whose heading shows the title, a one-line summary
+  (`<meta name="description">`, else the first paragraph, else the manifest note), the open count, chips,
+  "Full page" and Stale. Each item shows its question and answer controls first; bulky content sits behind
+  "Show details". On a plain page an item runs from its `<h2>` to the next one; its HTML is balanced on the
+  way in (a stray `</main>` or `</div>` from the page's wrappers is dropped, anything left open is closed), so
+  every group stays inside the content column. A folder with its own builder lists it in `site.json` `builders`. The group's "N open" chip
+  (`data-open-chip`) and the header total (`.open-total`) count what the bar counts: items not answered yet,
+  or Changes without a note; approved and hidden, skipped, blocked and question items don't count. review.js
+  keeps them current as answers change and sets them from the saved answers on every load.
+  `data-review-blocked` carries through from the source pages, prefixed like the ids.
+  A Copy button next to each group's "N open" chip copies just that page's results, in the Copy results
+  format (its own heading, items, STALE line, footer and questions); it doesn't open or close the group.
+- Converted pages wrap each item in `<section data-review-question="id" data-title="...">` and set
+  `<body data-review-h2="off">` so only those sections are items. `data-review-skip="on"` adds Skipped (locked)
+  for test checklists; `data-review-import="oldKey|prefix"` imports answers an older checklist saved.
+- `data-review-answers="yes,no"` on one item gives it its own set from `yes`, `no`, `chg` and `skip`, in place of
+  the page's (the renderer sets it on every page-file item, so one page can mix Yes / No items, choices and
+  questions). Mark unanswered leaves out items that don't offer the answer.
+- `data-review-stale="a.html|b/"` (set by build-review.py from `_saved/stale-log.json`, last 7 days) lists
+  those pages as `STALE: <page>` in Copy results.
+- `data-review-type="question"` on an `<h2>` or `[data-review-question]` item makes it an open question: a
+  free-text box instead of Yes / No / Changes, with `data-suggested="..."` adding a "Use suggestion" button.
+  See "Operating the site" below.
+- `data-review-options="start:Start,hold:Hold"` (value:label pairs, in order) and `data-review-default="hold"`
+  on `<body>` give every item the page's own choices instead of Yes / No / Changes; on one `<h2>` or
+  `[data-review-question]` item they override the page for that item. Each item shows the choices and a
+  "Comments (optional)" box (no Blocker button, no Skipped). An item nobody picked shows and counts as the
+  default ("Hold (default)"). Only what the owner picks or writes is saved (`{ v: "start", n: "..." }`, or
+  `{ v: "", n: "..." }` for a comment alone); the default is never written, so changing
+  `data-review-default` later moves every item nobody picked. Choice items are never approved, hidden or
+  blocking. The bar counts a choice item as answered once it has a pick that isn't the untouched default
+  (a comment alone isn't a pick), turns green when none is left on the default, and its picker is
+  "Not picked (n)"; it shows `2 of 4 picked · 1 start · 3 hold`. Copy results lists `- [id] HOLD: title`
+  and ends with the counts line instead of the approval line. build-review.py copies the choices onto each
+  item, so a choices group keeps them on the unified page; its `data-open-chip` shows the counts instead of
+  "N open" and it adds nothing to `.open-total`. gen-index.py shows its per-choice counts on its card instead
+  of an open count, from the saved answers as of the last gen-index.py run.
+  Server-built round text (`serve.py`) reads the page's `<body>` choices the same way.
+- Word diff items: `<div class="rvdiff">` inside an item shows a rewrite as a word diff grouped by sentence:
+  `<ins>` added (green, underlined), `<del>` removed (red, struck through), `<p class="same">` unchanged
+  context. `python3 _site/diff.py OLD NEW` (or `diff_html` / `diff_units` from Python) writes the block, HTML
+  escaped. `.rvdiff-pics` holds before and after pictures; `.rvdiff-key` is an optional key line. The
+  colours are the `--diff-*` tokens. Line breaks inside a unit are kept. For a fenced code block use
+  `diff.py --code OLD NEW` (or `code=True`): one unit per line, `<div class="rvdiff code">`, monospace.
+  review.js adds a Diff | Final switch per block (and Diff for all | Final for all when there are several).
+  See `docs/page-types.md` "(k) Diff item".
+- Pages without review.js (checklists, indexes) load `/_site/live.js` (`data-mode="page"` on non-index pages).
+- Page files (`<folder>/<slug>.json`, see `PAGE-FILE.md`) need none of this: the React app draws them into this
+  same markup and loads `review.js`, which then saves through the page file; `live.js` runs in `data-mode="file"`
+  there (the picture pop-out and new-window links only), because the app does the live redraw.
+- Element styles apply only under `<body class="site">`; design mocks can load site.css without losing their look.
+
+## Rounds and history
+
+A round is one pass of answers under one `data-build` value or `data-review-reset` version.
+Whenever either one changes, `serve.py` archives the answers that were on the box before the
+change (about to be cleared or reopened) to `_saved/history/<page-key>/`, before writing the new
+round's state; see `SAVE-API.md`. More, "Save round now" closes the current round by hand, without
+waiting for a build or version change.
+
+Every page collects its own rounds in one closed `<details>` at the very bottom, "History
+(n rounds)", never expanded automatically and never ahead of the page's current content; each
+round inside is its own closed `<details>` with a one-line summary (round, build, dates, a count
+like "21 of 34 Yes", or on a page with its own choices the per-choice counts, "1 start · 2 hold") and the same Copy results text that round had. The More menu's History item
+opens (and scrolls to) that block. `/<folder>/history/` (built by `gen-index.py`) lists every
+page's rounds the same way, one closed group per page. Stale keeps a page's history; the folder's
+history page then notes it as removed.
+
+## Look and bottom bar
+
+IBM Plex Sans and IBM Plex Mono, self-hosted in `_site/fonts/` (SIL OFL 1.1, `fonts/OFL.txt`; no font CDN).
+Every colour is a token on `:root` in `site.css`. Light and dark: the system setting by default (`prefers-color-scheme`); the
+Auto / Light / Dark toggle top-right in the header (from `/_site/theme.js`) keeps a choice per browser
+(`localStorage` `site-theme`) and sets `data-theme` on `<html>`. Load `theme.js` in `<head>` right after
+site.css so it applies before the first paint; review.js and live.js load it late on pages that don't.
+Every colour token is redefined twice for dark (under the media query, guarded by
+`:root:not([data-theme="light"])`, and under `:root[data-theme="dark"]`); no colour lives outside the tokens. Pages get a white header; a `[data-review-question]`
+section becomes the item card (id and status pill on top, border and pill follow the answer), and answers
+are a segmented group of real buttons (44 px; pressing the chosen one again clears it). The note box opens
+for Changes (required) and No (optional), or with "Add a note".
+
+The bar is one row when everything fits: Previous, Next, "Open IDs (n) ▴", the status dot and text, the Saved
+time, Send to <agent>, the delivery state, More. When anything would be cut, or a delivery state is showing, it splits into two rows. The count always stays on one line, and the delivery state is short, such as "picked up 21:46", with the full text on hover. The first:
+Previous, Next, the status, and the delivery state or the Saved time. The second: Send, Copy results, Clear my
+answers, Open IDs, More. On a phone it's always two rows and the second may wrap between controls. No control
+wraps inside itself: long text ends in an ellipsis.
+Open IDs opens upward: a filter box (an ID or title words), "N open · showing M", the list (up to 200 rows),
+↑↓ / Enter / Esc. The n and p keys still jump between open items. More holds Mark unanswered Yes, Mark
+unanswered No, Copy results, Copy blockers only (every item marked with "Blocker: copy now", in that
+format), History, Save round now and Clear my answers. The two Mark items fill in only the Yes / No / Changes
+items with no answer yet (never hidden, blocked or Skipped (locked) ones, open questions or a page's own
+choices), after a confirm that gives the count, and never change an answer or note already given. States: dark while items are open; green "All N answered · ready to copy" when every one is
+answered; green "APPROVED · all N Yes" when all are Yes; a red ring and "N BLOCKER" while a blocker is
+marked; an amber "Not saved · retrying" pill when a save fails. Its sizes are the `--bar-*` knobs at the top of the bar's rules in site.css. Up to 760 px it uses the short labels. A finished page (the bar is green) shows "← Back to <Folder> pages" in the bar and a
+toast with that link; after Copy results there it returns to the folder index in 1.5 s unless they move,
+scrolls or types (never while typing, and only once the answers are saved). The counting is `window.rvCount` in review.js.
+
+## Live
+
+Indexes and review pages poll themselves every 10 s (paused while the tab is hidden). Indexes swap their cards
+in place and light up "New"/"Updated". Review pages reload softly, never while the owner is typing, within 5 s
+of a click, or while answers are unsaved, and keep the scroll position. Just write the file and rerun
+gen-index.py; nobody needs to refresh.
+
+## How to test (inline)
+
+Put test steps in a `<template data-howto>` inside the item (or its h2 section). review.js shows them right
+there as a collapsed "How to test" row (`<details class="howto">`) that opens in place, with `data-build` in its
+heading. Every `<pre>` and `code.cmd` in it gets a Copy button. Existing `class="howto"` blocks and checklist
+`.item .how` lines are converted automatically. Checklists with their own answer script load review.js with
+`<body data-review-controls="off">`: review.js then only starts live updates.
+
+## Pictures (pop-out)
+
+Link each picture to its own file and put the `<img>` inside the link:
+
+```html
+<a href="img/login-built.png" target="_blank" rel="noopener"><img src="img/login-built.png" alt="Login as built" width="320"></a>
+```
+
+`live.js` (on every page, and inside the unified page's detail frames) turns a plain click on such a link
+into one named pop-out window (`picture`, 1000x760, reused): the picture fitted to the window, its `alt` text
+as the caption, and a "Full size" link. Clicking another picture swaps it into the same window and brings
+the window to the front. Only links that wrap an `<img>` and point at a `.png`, `.jpg`, `.jpeg`, `.gif`,
+`.webp` or `.svg` file count. Middle-click, Cmd- or Ctrl-click, a `download` link, a blocked pop-up or a
+browser without JavaScript keep the plain link (a new tab). Keep pictures in a subfolder such as `img/`.
+A subfolder with no `.html` file in it is never a page, so the index leaves it out; it needs no
+`_status.json` entry.
+
+## Moments
+
+A short glow marks what just happened on a page file: a Send, a reply landing, an item locking into history, Accept risk settling, a phase closing, or an email version arriving. They only change colour, so nothing moves. They skip while someone's typing, and under `prefers-reduced-motion`.
+
+## The green box
+
+A sent item has a green box and shows "Sent, waiting", and it's locked. The agent's next reply or update clears it.
+
+## Guided tour
+
+Each page file has a Take the tour button in its header. It runs [driver.js](https://driverjs.com) over the page's real controls, one tour per page kind, and is bundled in the app with no CDN. It never starts by itself. Once it's been seen, the browser remembers and the button says See the tour again. `CUSTOM.md` shows how a custom page adds its steps.
+
+## Links (new window)
+
+`live.js` makes a link inside a step or item open in a new window (`target="_blank"`, `rel="noopener"`), set
+as the click happens, so cards and threads drawn later are covered too. That covers item cards, threads, the
+How to test steps and the main column of an HTML review page. Browsing the site stays in the same tab: index
+cards, folder links, the header and the bar. Same-page `#` anchors, picture links (the pop-out above), `download`
+links, `mailto:` and other non-web links, and any link that sets its own `target` keep their behaviour. Writing `target="_blank"` into a page by hand is never needed.
+
+## Wording
+
+- Answers, review pages: Yes, No, Changes (notes required for Changes). Test checklists add Skipped. A
+  choices page: its own labels, with "Comments (optional)".
+- Item states: Open, Reopened: <reason>, Approved, Skipped (locked), Blocked by <id>; on a choices page the
+  chosen label, or `<label> (default)`.
+- Buttons: Copy results, Copy (one unified-page group), Mark unanswered Yes, Mark unanswered No, Clear my answers (never clears approved or locked items), Blocker: copy now,
+  Stale: remove this page.
+- Progress: `<n> of <m> answered`, plus ` · <b> blocked`, ` · <s> skipped`, ` · <k> approved and hidden` (`approved and locked` on a page file); each item's id links to the item, and so does a Blocked by pill that names one
+  when above 0, plus ` · <j> questions unanswered` when j > 0 (open questions never count toward `<n>` or
+  `<m>`). Choice items count toward `<n>` and `<m>` and add ` · <n> <label> · <n> <label>`; a page with only
+  choice items shows `<n> of <m> picked · <counts>`.
+- Copy results lines: `- [id] ANSWER: title` (a choice item: its label in capitals) and `    Note: ...`;
+  `STALE: <page>`; footer `APPROVED: every item is Yes.` or `Not approved yet: <n> of <m> are Yes.` (left
+  out when every item is a choice item), then the per-choice counts when there are choice items,
+  then `<j> open questions`
+  when j > 0, then each question as its own `Q <id>: <answer>` (or `Q <id>: (no answer)`) line.
+- Index sections: Needs you, Reference (a grid), Completed (collapsed). Root: Needs you now, grouped by
+  folder with each folder's open-item total (the unified `review/` card is left out of it, so no item
+  counts twice), then Reference and Completed across folders, then Folders. Cards are never ordered by change time:
+  `priority` first, then `review/`, then each numbered series where its first page sits in `_status.json`,
+  numbered pages naturally inside it (2 before 10), then manifest order (`order_pages()` in gen-index.py).
+- History: "History (n rounds)", "Round N", "Save round now", "page removed".
+- Chips: New (first seen in the last 24 h), Updated, To review, Reopened, Approved, Reference, Done,
+  Not classified, plus custom chips from `"chips"`.
+
+## Operating the site
+
+- **Config:** `site.json` at the root holds the title, owner, host, port, timezone, review windows, the
+  folders (id, name, blurb), `key_prefix`, `blocker_to`, protected pages, per-folder builders and the prune
+  settings. Every name on the site comes from it.
+- **Server:** `nohup python3 -u _site/serve.py --directory . >> server.log 2>&1 &` (host and port from
+  `site.json`; flags override). Writable endpoints: `PUT /_save/<name>.json` and `POST /_stale`,
+  `POST /_round-close`, plus the page file writes under `/_page/` (see `PAGE-FILE.md`); nothing else.
+  `_inbox/` is never served. `_saved/` (history included) is never served directly, only read
+  through `GET /_history/<page-key>/` and `GET /_history/<page-key>/<file>`.
+- **Stale deletes for real:** after the owner's confirm, `POST /_stale {folder, page}` checks the page is
+  listed in that folder's `_status.json` and lies inside that folder (never `_site/`, `_old/`, a folder
+  root, `review/` or a `protected` page), deletes it, marks it `done` with `Stale (<owner>, <date> <tz>)`,
+  logs it in `_saved/stale-log.json`, and reruns the builders. Its round history stays; `/_history/` reports
+  `page_removed: true` once the page is gone.
+- **`_old/` pruning:** files under any `_old/` folder older than `prune_old_days` (default 7) are deleted
+  hourly and listed in `_saved/prune-log.json`. Set `"prune_old": false` to keep them. `_saved/` itself,
+  including round history, is never walked by the pruner.
+- **Never a git repo:** this folder is working memory and is never committed. `serve.py` refuses to start
+  inside a git work tree, and `install.sh` refuses to install into one.
+- **Root filter:** one "Projects" dropdown (checkboxes with needs-you counts, All, None). The choice stays in
+  the browser (`localStorage` `site-filter`).
+- **Focus and order:** optional `_site/focus.json` `{"order": [...], "focus": [...]}` overrides `site.json`
+  `order`. Within a project, cards sort by `priority`, then `review/`, then by number and `_status.json`
+  order (see Index sections above); never by change time.
+- **Open questions:** review and design pages may also carry open-ended questions, as their own item type:
+  a free-text answer box (no Yes / No / Changes), shown with the question, its context and any suggested
+  answer. Copy results lists each as "Q <id>: <answer>". They are not blockers: no Blocker button, and they
+  don't hold up a page's approval. Use one only when the answer isn't a choice; choices with options still
+  go to AskUserQuestion. Questions are never left as plain text inline on a page.

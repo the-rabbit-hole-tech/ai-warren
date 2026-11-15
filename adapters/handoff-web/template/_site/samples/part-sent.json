@@ -1,0 +1,52 @@
+{
+  "definition": {
+    "schema": "handoff.page/v1",
+    "kind": "review",
+    "title": "Sample: sent with items still open",
+    "status": {
+      "state": "needs-you",
+      "priority": 40
+    },
+    "items": [
+      {
+        "id": "a",
+        "title": "Sent, so it's in a green box and locked"
+      },
+      {
+        "id": "q1",
+        "type": "question",
+        "title": "Which weekend suits you? This one was sent, so it's boxed in green until the agent replies."
+      },
+      {
+        "id": "b",
+        "title": "Not sent, so it stays open"
+      },
+      {
+        "id": "c",
+        "title": "Also open"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "answers": {
+        "a": {
+          "answer": "yes",
+          "note": ""
+        },
+        "q1": {
+          "answer": "The second weekend",
+          "note": ""
+        }
+      },
+      "at": "2026-01-05T09:00:00+00:00"
+    },
+    {
+      "send": [
+        "a",
+        "q1"
+      ],
+      "at": "2026-01-05T09:30:00+00:00"
+    }
+  ]
+}

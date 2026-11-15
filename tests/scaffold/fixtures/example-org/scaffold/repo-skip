@@ -1,0 +1,2 @@
+# <repo> <path>: a shared file this one repo keeps out (it carries its own).
+svc-two .github/workflows/job-golic.yaml

@@ -1,0 +1,83 @@
+#!/bin/sh
+# Global git hook dispatcher, installed by warren-guard-sync into ~/.config/warren/git-hooks and
+# reached through core.hooksPath. Enforces the one identity this machine allows, runs the scrub
+# gate on pre-push, then runs the repo's own hook (a global core.hooksPath disables .git/hooks).
+# The identity comes from the global git config, set once per person per machine:
+#   guard.expectedLogin       the gh account that must be active
+#   guard.expectedName        author and committer name
+#   hooks.expectedAuthorEmail author and committer email (the key repo pre-push hooks read too)
+# Any of them unset blocks every commit and push: the guard fails closed.
+# GUARD_CHECK_ONLY=1 runs the identity check and exits without chaining.
+hook=$(basename "$0")
+
+fail() { echo "COMMIT BLOCKED: $1" >&2; [ -n "${EXPECTED_LOGIN:-}" ] && echo "Only $EXPECTED_LOGIN may commit on this machine." >&2; exit 1; }
+
+load_identity() {
+  EXPECTED_LOGIN=$(git config --global --get guard.expectedLogin 2>/dev/null)
+  EXPECTED_NAME=$(git config --global --get guard.expectedName 2>/dev/null)
+  EXPECTED_EMAIL=$(git config --global --get hooks.expectedAuthorEmail 2>/dev/null)
+  if [ -z "$EXPECTED_LOGIN" ] || [ -z "$EXPECTED_NAME" ] || [ -z "$EXPECTED_EMAIL" ]; then
+    EXPECTED_LOGIN=""
+    fail "guard identity not set: run warren init (guard.expectedLogin, guard.expectedName and hooks.expectedAuthorEmail in the global git config)"
+  fi
+}
+
+check_login() {
+  login=$(gh config get -h github.com user 2>/dev/null)
+  [ "$login" = "$EXPECTED_LOGIN" ] || fail "active gh account is '${login:-none}', expected '$EXPECTED_LOGIN'"
+}
+
+case "$hook" in pre-commit|pre-merge-commit)
+  load_identity
+  # git var honors GIT_AUTHOR_*/GIT_COMMITTER_* env overrides and repo-local config
+  for role in AUTHOR COMMITTER; do
+    ident=$(git var GIT_${role}_IDENT) || fail "cannot determine $role identity"
+    email=$(printf '%s' "$ident" | sed -n 's/.*<\(.*\)>.*/\1/p')
+    [ "$email" = "$EXPECTED_EMAIL" ] || fail "$role email is '$email', expected '$EXPECTED_EMAIL'"
+    name=$(printf '%s' "$ident" | sed -n 's/^\(.*\) <.*/\1/p')
+    [ "$name" = "$EXPECTED_NAME" ] || fail "$role name is '$name', expected '$EXPECTED_NAME'"
+  done
+  check_login
+  ;;
+pre-push)
+  load_identity
+  # cherry-pick, rebase and am never run pre-commit, so check every commit that is
+  # new to the remote before it leaves the machine.
+  input=$(cat)
+  [ -n "$input" ] && input="$input
+"
+  expected="$EXPECTED_NAME|$EXPECTED_EMAIL|$EXPECTED_NAME|$EXPECTED_EMAIL"
+  # shellcheck disable=SC2034 # every pre-push field is read; only the local sha is used
+  bad=$(printf '%s' "$input" | while read -r lref lsha rref rsha; do
+          [ -n "$lsha" ] || continue
+          [ -n "$(printf '%s' "$lsha" | tr -d 0)" ] || continue   # all zeros = branch delete
+          git log --format='%h %an|%ae|%cn|%ce' "$lsha" --not --remotes 2>/dev/null
+        done | grep -v -F " $expected" | head -5)
+  [ -z "$bad" ] || fail "commits not authored and committed as $EXPECTED_NAME:
+$bad"
+  check_login
+  # Content scrub of everything new to the remote (scrub/README.md). Fails closed.
+  scrub_gate="$(cd "$(dirname "$0")" && pwd)/scrub/gate.py"
+  if ! command -v python3 >/dev/null 2>&1 || [ ! -r "$scrub_gate" ]; then
+    echo "PUSH BLOCKED: the scrub gate is missing ($scrub_gate or python3)." >&2; exit 1
+  fi
+  printf '%s' "$input" | python3 -I "$scrub_gate" "$@" || exit 1
+  ;;
+esac
+[ "${GUARD_CHECK_ONLY:-0}" = 1 ] && exit 0
+
+# Chain to the repo's own hooks: guard.chainPath (a hooks dir moved out of a
+# repo-local core.hooksPath, e.g. husky's .husky/_) if set, else .git/hooks.
+chain=$(git config --get guard.chainPath)
+if [ -n "$chain" ]; then
+  case "$chain" in /*) ;; *) chain="$(git rev-parse --show-toplevel)/$chain" ;; esac
+  local_hook="$chain/$hook"
+else
+  local_hook="$(git rev-parse --git-common-dir)/hooks/$hook"
+fi
+if [ -x "$local_hook" ]; then
+  # pre-push input was consumed above; hand the same lines to the chained hook.
+  if [ "$hook" = pre-push ]; then printf '%s' "$input" | "$local_hook" "$@"; exit $?; fi
+  exec "$local_hook" "$@"
+fi
+exit 0

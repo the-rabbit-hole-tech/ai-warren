@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "__REPO_NAME__"
+version = "0.0.0"
+description = "__DESCRIPTION__"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "__LICENSE__" }
+authors = [{ name = "__AUTHOR__" }]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/__OWNER__/__REPO_NAME__"
+Issues = "https://github.com/__OWNER__/__REPO_NAME__/issues"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=5",
+    "ruff>=0.8",
+    "mypy>=1.13",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/__PYPKG__"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+files = ["src"]

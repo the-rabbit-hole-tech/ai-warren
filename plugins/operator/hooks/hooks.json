@@ -1,0 +1,11 @@
+{
+  "description": "operator: tag each tmux pane with its session so tmux-restore can resume it",
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/tmux-claude-tag.sh" } ] }
+    ],
+    "SessionEnd": [
+      { "hooks": [ { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/tmux-claude-tag.sh" } ] }
+    ]
+  }
+}

@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# Bring an EXISTING repo under the shared governance. Adds a CLAUDE.md when it has none; with
+# --sync lays down the whole shared set; with --eco adds the ecosystem's CI files the repo lacks.
+# Never commits or stages: review and commit on your own branch.
+#
+#   warren-apply-governance [--sync] [--eco <eco>[/<variant>]] [-d <desc>] [--force] [--scaffold-dir <dir>] <repo>
+#
+#   --sync      the full shared set: workflows (Go and npm ones by manifest), labels, the
+#               release-drafter config (or none, for an owner that extends a shared one),
+#               templates, CLAUDE.md with the repo's recorded layout, and the owner's
+#               CODEOWNERS lines and skip list.
+#   --eco <e>   the ecosystem's CI files the repo doesn't have yet (.github/, Taskfile, .licignore,
+#               .golic.yaml, .yamllint, .golangci.yml) and the owner's starting files it lacks,
+#               tokens filled. Files the repo already has are never touched. A missing CLAUDE.md
+#               gets the layout block for <eco>/<variant> (default: the first variant).
+#   -d <desc>   the description token (default: the GitHub description, when gh can read it).
+#   --force     apply to a repo the owner lists as protected (scaffold/protected).
+#
+# The owner comes from the origin remote. The repo's .claude/settings.json is a separate step
+# (/warren:warren-repo); git hooks come from the machine's guard, so none are installed here.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+SCAFFOLD_ROOT="$(dirname "$here")"
+# shellcheck source=../lib/scaffold.sh
+source "$SCAFFOLD_ROOT/lib/scaffold.sh"
+
+SYNC=0; ECO=""; DESC=""; TARGET=""; VARIANT=""; FORCE=0
+SCAFFOLD_DIR_FLAG="${SCAFFOLD_DIR_FLAG:-}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --sync) SYNC=1 ;;
+    --force) FORCE=1 ;;
+    --eco) ECO="${2:?--eco needs an ecosystem}"; shift ;;
+    -d|--desc) DESC="${2:-}"; shift ;;
+    --scaffold-dir) SCAFFOLD_DIR_FLAG="${2:?--scaffold-dir needs a folder}"; shift ;;
+    -*) echo "unknown option: $1" >&2; exit 2 ;;
+    *) [ -z "$TARGET" ] || { echo "unexpected arg: $1" >&2; exit 2; }; TARGET="$1" ;;
+  esac
+  shift
+done
+[ -n "$TARGET" ] || { echo "usage: warren-apply-governance [--sync] [--eco <eco>[/<variant>]] [-d <desc>] <path-to-repo>" >&2; exit 2; }
+export SCAFFOLD_DIR_FLAG
+ROOT="$(cd "$TARGET" && git rev-parse --show-toplevel)"
+case "$ECO" in */*) VARIANT="${ECO#*/}"; ECO="${ECO%%/*}" ;; esac
+if [ -n "$ECO" ]; then
+  [ -d "$ECOS/$ECO/template" ] || { echo "unknown ecosystem $ECO (ecosystems: $(eco_list))" >&2; exit 2; }
+  [ -n "$VARIANT" ] || VARIANT="$(layout_default "$ECO")"
+  layout_file "$ECO" "$VARIANT" >/dev/null || exit 2
+fi
+
+slug="$(git -C "$ROOT" config --get remote.origin.url 2>/dev/null | sed -E 's#.*github.com[:/]##; s#\.git$##' || true)"
+owner="${slug%%/*}"; owner="${owner:-OWNER}"
+repo="${slug##*/}"; repo="${repo:-$(basename "$ROOT")}"
+org_use "$owner"
+if org_protected "$repo" && [ "$FORCE" -eq 0 ]; then
+  echo "$owner/$repo is protected (listed in $ORG_DIR/protected); nothing changed. --force overrides." >&2
+  exit 3
+fi
+if [ -z "$DESC" ] && [ "$owner" != OWNER ] && { [ "$SYNC" -eq 1 ] || [ -n "$ECO" ]; }; then
+  DESC="$(gh repo view "$owner/$repo" --json description -q .description 2>/dev/null || true)"
+fi
+org_env "$owner" "$repo" "${DESC:-A project.}"
+echo "owner settings: ${ORG_DIR:-none (generic defaults)}"
+
+# CLAUDE.md: add one only when missing. With --eco it records the ecosystem and layout in the
+# managed block, which is how a later --sync knows what the repo is.
+if [ ! -f "$ROOT/CLAUDE.md" ]; then
+  cp "$GOV/CLAUDE.repo.template.md" "$ROOT/CLAUDE.md"
+  if [ -n "$ECO" ]; then layout_render "$ROOT/CLAUDE.md" "$ECO" "$VARIANT"; else layout_strip "$ROOT/CLAUDE.md"; fi
+  fill_file "$ROOT/CLAUDE.md"
+  echo "  + CLAUDE.md${ECO:+ ($ECO/$VARIANT)}"
+else
+  echo "  . CLAUDE.md exists, left as it is"
+fi
+
+if [ "$SYNC" -eq 1 ]; then
+  ( cd "$ROOT" && apply_overlay )
+  echo "  + shared governance ($owner)"
+fi
+
+if [ -n "$ECO" ]; then
+  added=()
+  # The owner's starting files first, so they win over the ecosystem's.
+  if [ -n "$ORG_DIR" ] && [ -d "$ORG_DIR/overlay" ]; then
+    while IFS= read -r f; do
+      rel="${f#"$ORG_DIR/overlay/"}"
+      [ -e "$ROOT/$rel" ] && continue
+      mkdir -p "$(dirname "$ROOT/$rel")"; cp "$f" "$ROOT/$rel"; added+=("$rel")
+    done < <(find "$ORG_DIR/overlay" -type f)
+  fi
+  src="$ECOS/$ECO/template"
+  while IFS= read -r f; do
+    rel="${f#"$src/"}"
+    case "$rel" in
+      .github/*|Taskfile.yml|Taskfile.yaml|.licignore|.golic.yaml|.yamllint|.golangci.yml) ;;
+      *) continue ;;
+    esac
+    [ -e "$ROOT/$rel" ] && continue
+    mkdir -p "$(dirname "$ROOT/$rel")"; cp "$f" "$ROOT/$rel"; added+=("$rel")
+  done < <(find "$src" -type f)
+  for rel in ${added[@]+"${added[@]}"}; do
+    fill_file "$ROOT/$rel"
+    echo "  + $rel"
+  done
+  # The skip lists also cover what the ecosystem template carried.
+  org_skip "$ROOT" "$repo"
+fi
+
+echo "governance laid into $ROOT ($owner/$repo); review and commit on your branch."

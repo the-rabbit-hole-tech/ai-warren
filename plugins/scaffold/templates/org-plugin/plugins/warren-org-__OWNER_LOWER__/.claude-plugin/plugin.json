@@ -1,0 +1,6 @@
+{
+  "name": "warren-org-__OWNER_LOWER__",
+  "description": "The __OWNER__ rules: what this owner adds on top of the ai-warren base.",
+  "author": { "name": "__AUTHOR__" },
+  "license": "Apache-2.0"
+}

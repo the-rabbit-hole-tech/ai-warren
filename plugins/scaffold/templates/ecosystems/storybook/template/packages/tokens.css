@@ -1,0 +1,7 @@
+:root {
+  --ui-color-accent: #4338ca;
+  --ui-color-on-accent: #ffffff;
+  --ui-radius: 0.375rem;
+  --ui-space-1: 0.5rem;
+  --ui-space-2: 1rem;
+}

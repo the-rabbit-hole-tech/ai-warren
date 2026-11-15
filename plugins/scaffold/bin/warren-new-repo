@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# Scaffold a new repo: compose the ecosystem template, the shared governance and the owner's own
+# files, fill the tokens, make the first commit, create the GitHub repo, push, and apply the
+# ruleset and topics.
+#
+#   warren-new-repo <name> <ecosystem> [options]
+#
+# Options:
+#   --org <owner>          owner of the repo (default: the signed-in gh user)
+#   --private              create a private repo and compose the private overlays
+#   --variant <v>          project layout for CLAUDE.md (templates/ecosystems/<eco>/layouts/variants;
+#                          default: the first)
+#   -d, --desc <text>      one-line description
+#   --existing             the GitHub repo exists and is empty: push into it, no gh repo create
+#   --no-remote            scaffold and commit locally only; origin is set for a later push
+#   --dry-run              write the filled tree only: no git, no commit, no GitHub calls; prints
+#                          what a real run would do. Needs --org.
+#   --out <dir>            parent folder for the new repo (default: the current folder)
+#   --scaffold-dir <dir>   the owner's scaffold/ folder (default: found by owner, see README.md)
+#
+# The owner's settings (holder, licence, operator, DCO, CODEOWNERS, ruleset, skip list, starting
+# files) come from its scaffold/ folder; an owner without one gets the generic defaults.
+set -euo pipefail
+
+NAME=""; ECO=""; PRIVATE=0; ORG=""; DESC=""; REMOTE=1; VARIANT=""; EXISTING=0; DRY=0; OUT="$PWD"
+SCAFFOLD_DIR_FLAG=""
+usage() { echo "usage: warren-new-repo <name> <$(eco_list | tr ' ' '|')> [--org <owner>] [--private] [--variant <v>] [-d <desc>] [--existing|--no-remote|--dry-run] [--out <dir>] [--scaffold-dir <dir>]" >&2; exit 2; }
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+SCAFFOLD_ROOT="$(dirname "$here")"
+# shellcheck source=../lib/scaffold.sh
+source "$SCAFFOLD_ROOT/lib/scaffold.sh"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --private) PRIVATE=1 ;;
+    --org) ORG="${2:?--org needs an owner}"; shift ;;
+    --variant) VARIANT="${2:?--variant needs a variant}"; shift ;;
+    -d|--desc) DESC="${2:-}"; shift ;;
+    --no-remote) REMOTE=0 ;;
+    --existing) EXISTING=1 ;;
+    --dry-run) DRY=1; REMOTE=0 ;;
+    --out) OUT="${2:?--out needs a folder}"; shift ;;
+    --scaffold-dir) SCAFFOLD_DIR_FLAG="${2:?--scaffold-dir needs a folder}"; shift ;;
+    -h|--help) usage ;;
+    -*) echo "unknown option: $1" >&2; exit 2 ;;
+    *) if [ -z "$NAME" ]; then NAME="$1"; elif [ -z "$ECO" ]; then ECO="$1"; else echo "unexpected arg: $1" >&2; exit 2; fi ;;
+  esac
+  shift
+done
+[ -n "$NAME" ] && [ -n "$ECO" ] || usage
+export SCAFFOLD_DIR_FLAG
+
+# Check the ecosystem and variant before any prompt or network call, so a typo costs nothing.
+[ -d "$ECOS/$ECO/template" ] || { echo "unknown ecosystem $ECO (ecosystems: $(eco_list))" >&2; exit 2; }
+if [ -n "$VARIANT" ] && ! layout_file "$ECO" "$VARIANT" >/dev/null; then exit 2; fi
+[ -n "$VARIANT" ] || VARIANT="$(layout_default "$ECO")"
+if [ "$DRY" -eq 1 ] && [ -z "$ORG" ]; then echo "--dry-run needs --org (it makes no GitHub calls)" >&2; exit 2; fi
+OWNER="${ORG:-$(gh api user --jq .login)}" || { echo "cannot resolve the signed-in GitHub user (gh auth login)" >&2; exit 1; }
+mkdir -p "$OUT"; OUT="$(cd "$OUT" && pwd)"
+DEST="$OUT/$NAME"
+[ -e "$DEST" ] && { echo "already exists: $DEST" >&2; exit 1; }
+MODE=public; [ "$PRIVATE" -eq 1 ] && MODE=private
+if [ -z "$DESC" ]; then
+  if [ "$DRY" -eq 1 ] || [ ! -t 0 ]; then DESC="A new project."; else read -r -p "Description: " DESC || true; fi
+fi
+DESC="${DESC:-A new project.}"
+
+org_use "$OWNER"
+echo "owner settings: ${ORG_DIR:-none (generic defaults)}"
+
+# 1. Compose and fill the tree.
+compose "$ECO" "$DEST" "$MODE" "$VARIANT" "$OWNER"
+org_env "$OWNER" "$NAME" "$DESC"
+fill_tree "$DEST"
+
+if [ "$DRY" -eq 1 ]; then
+  VIS=public; [ "$PRIVATE" -eq 1 ] && VIS=private
+  topics="$(bash "$here/warren-apply-topics" --print "$OWNER/$NAME" "$ECO" "$VARIANT" 2>/dev/null | paste -sd, -)"
+  echo "dry run: wrote $DEST ($ECO/$VARIANT, $MODE); no git, no commit, nothing on GitHub"
+  echo "a real run would:"
+  echo "  - git init, set origin https://github.com/$OWNER/$NAME.git, commit 'chore(repo): scaffold $NAME'$([ "$(org_setting dco)" = true ] && echo ' (signed off)')"
+  [ "$EXISTING" -eq 1 ] || echo "  - gh repo create $OWNER/$NAME --$VIS"
+  echo "  - push main, apply the branch ruleset ($( [ -n "$(org_ruleset)" ] && echo "the owner's" || echo default )) and the merge policy"
+  echo "  - add topics: ${topics:-none}"
+  exit 0
+fi
+
+# 2. git, with the operator's GitHub noreply identity pinned before the first commit so a machine
+# whose global identity is another account can't leak it into history. The operator is the
+# signed-in gh user, not $OWNER, which may be an org. origin is set before the first commit so
+# hooks that pick checks by remote see the repo the commit is for.
+cd "$DEST"
+git init -q -b main
+OP_LOGIN=$(gh api user --jq .login) && OP_ID=$(gh api user --jq .id) \
+  || { echo "cannot resolve the signed-in GitHub user (gh auth login)" >&2; exit 1; }
+git config user.name "$OP_LOGIN"
+git config user.email "${OP_ID}+${OP_LOGIN}@users.noreply.github.com"
+git remote add origin "https://github.com/$OWNER/$NAME.git"
+
+# 3. Licence headers, so the golic check passes on the first push (needs Go and go-task).
+if [ -f .licignore ] && { [ -f Taskfile.yml ] || [ -f Taskfile.yaml ]; }; then
+  if command -v task >/dev/null 2>&1 && command -v go >/dev/null 2>&1; then
+    task license:fix || echo "warning: header stamping failed; run 'task license:fix' before the next commit"
+  else
+    echo "skipping header stamping (needs Go and go-task); run 'task license:fix' before the next commit"
+  fi
+fi
+
+# 4. First commit, through whatever hooks the machine runs.
+git add -A
+SIGNOFF=(); [ "$(org_setting dco)" = true ] && SIGNOFF=(-s)
+git commit -q ${SIGNOFF[@]+"${SIGNOFF[@]}"} -m "chore(repo): scaffold $NAME
+
+Scaffold the $NAME $ECO repository: governance, GitHub templates,
+CI workflows, and a placeholder package. No project logic yet."
+
+# 5. Create the GitHub repo, push, and apply the ruleset and topics.
+if [ "$REMOTE" -eq 1 ]; then
+  if [ "$EXISTING" -eq 0 ]; then
+    VIS=--public; [ "$PRIVATE" -eq 1 ] && VIS=--private
+    gh repo create "$OWNER/$NAME" "$VIS" -d "$DESC"
+  fi
+  git push -u origin main
+  bash "$here/warren-apply-ruleset" "$OWNER/$NAME" || echo "warning: ruleset not applied (run warren-apply-ruleset $OWNER/$NAME)"
+  bash "$here/warren-apply-topics" "$OWNER/$NAME" "$ECO" "$VARIANT" || echo "warning: topics not applied (run warren-apply-topics $OWNER/$NAME $ECO $VARIANT)"
+  echo "created and pushed $OWNER/$NAME ($ECO/$VARIANT, $MODE)"
+else
+  echo "scaffolded locally at $DEST ($ECO/$VARIANT, $MODE); not pushed, no GitHub repo created"
+  echo "origin is $(git remote get-url origin); once that repo exists: git push -u origin main"
+fi
+echo "optional: /warren:warren-repo writes .claude/settings.json if this repo needs its own plugin list or overrides"

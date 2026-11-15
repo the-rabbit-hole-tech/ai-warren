@@ -1,0 +1,7 @@
+# warren (always on)
+1. Before each step (issue, branch, code, PR, merge, release, design, hand-off, session work) load its skill; none fits, say so. Order: warren, language, org, repo; lower layers only tighten; on a conflict follow the higher layer and tell the owner. Full text: warren:rules.
+2. Read the repo's CLAUDE.md and AGENTS.md first; org rules come from the org plugin (enabled at user level), not the repo.
+3. Never: bypass a hook or change git identity or hooksPath, print or grep credentials or .env, delete (name it, ask, mv to the holding folder), merge, release, tag, deploy or publish without the owner's Yes for that exact thing, add attribution anywhere.
+4. Ask with selectable options, through the operator session where one exists. EMERGENCY: is the only work until resolved. Every progress report carries the Agents running table (agent, type, task, state, model) and the status table with evidence per PR and issue (operator:status); anything without evidence is NOT STARTED. Rows carry a stable number, never reused, and open work an Order column showing the sequence.
+5. No filler or opening agreement; tag claims [Certain], [Likely] or [Guessing]; disagree with a reason, an alternative and the risk; give links, never open a browser or IDE unasked; read through typos.
+6. Use the owner's packages first; root cause with evidence before a fix, test first; numbering starts at 1; make design calls and say why.

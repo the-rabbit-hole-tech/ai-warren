@@ -1,0 +1,11 @@
+# Skill-first gate table, read by skill-gate.sh. Two tab-separated columns:
+#   <regex>	<plugin:skill>
+# The regex is searched in "<program> <group> <verb>" for gh (gh pr create) and
+# "<program> <subcommand>" for tmux (tmux kill-window). The first row that matches decides.
+# A skill column may list alternatives with | (any one loaded passes; the first installed one is named in the deny). A skill that is not installed is not required. Add rows here; no code change is needed.
+^gh pr (create|edit|ready)$	github:work|github:open-pr
+^gh pr merge$	github:merge|github:approve-merge
+^gh issue (create|edit)$	github:work|github:file-issue
+^gh repo (edit|create|delete|rename|archive)$	github:repos|github:repo-metadata
+^gh release (create|edit)$	github:release
+^tmux (kill-[a-z]+|new-window|new-session)$	operator:sessions

@@ -1,0 +1,317 @@
+"""Smoke tests for JSON pages in a real browser: the app draws each page file into today's DOM, review.js answers
+it, and every feature of the HTML pages still works (design section 11), plus Send, the delivery state, the thread,
+Restart and a live redraw. Drives headless Chrome against a real serve.py; skipped when no Chrome or Chromium is
+installed. The scenarios live in tests/js/page_smoke.html."""
+
+import html
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+import urllib.request
+from pathlib import Path
+
+import pytest
+
+from test_review_choices import find_chrome
+from test_review_smoke import free_port
+
+ROOT = Path(__file__).resolve().parent.parent
+HARNESS = ROOT / "tests" / "js" / "page_smoke.html"
+sys.path.insert(0, str(ROOT / "template" / "_site"))
+
+import pagefile  # noqa: E402
+import samples  # noqa: E402
+
+SCENARIOS = [
+    "review: answers, notes, card follows answer, green then approved, saved to the page file",
+    "review: Changes needs a note; Blocker: send now writes a blocker to the inbox; copy blockers",
+    "copy route: Blocker: copy now copies, and there is no Send button",
+    "jump bar: Next and the n key walk open items; the picker filters and Enter jumps",
+    "saved answers load from the page file; a failed save shows amber",
+    "checklist: skip locks, earlier Yes locked, blocked by a dependency, reopened with its reason, question",
+    "checklist: answering an item Yes unblocks the items that depend on it at once, no reload",
+    "question: Use suggestion fills the answer and saves it",
+    "question skip: Skip locks the text, the pill and Copy results say so, Un-skip gives the text back",
+    "backlog: default choice, picking every item turns the bar green, saved",
+    "theme toggle works on a rendered page",
+    "samples: every sample page draws, and the states they show are the ones they claim",
+    "fix in progress: a purple locked card with its chip and text, left out of the count, Send and Copy results",
+    "reopened Yes: the old note is history, not the current note, and nothing from before the reopen is sent",
+    "listeners: the home page switch pauses and resumes them for every tab, and a paused page says its Send is saved",
+    "backlog board: a contents list with a filter, Start only marks, Send this item sends one pick, Drop asks first",
+    "backlog board: Start or Hold has to be pressed before Send this item appears; a comment alone offers nothing",
+    "choice items with their own options get Send this item too, and it sends only that item",
+    "backlog home: its own section above the folders with a count, /backlog and the old address both open the board",
+    "backlog item context: separate paragraphs, bullets, a bold label, and a long one folds its detail under Details",
+    "landing page: its back link goes home, not to the folder that redirects straight back, and browser Back does not loop",
+    "round phases: lettered ids, phase and step blocking, its own Send, and Accept risk needs a note",
+    "email: reads as To, Subject and Body, says what to enter, carries the step, and locks nothing",
+    "deck: asks what you're building, sends only final Yes and Accept risk, and locks nothing",
+    "custom: a template from custom/ draws the page, on the same elements",
+    "round single: Accept risk on one set of items, sent from the bar",
+    "bar: a page with a reply status always shows row two, whatever the width",
+    "bar: text that gets wider after the first draw splits the bar, as a late font does",
+    "links: browsing stays in this tab, and a link inside an item opens a new one",
+    "tour: started by the person, walks real controls on each page type, and remembers it's been seen",
+    "bar: the longest count stays on one line beside a picked-up status, with the full text on hover",
+    "moments: each thing that happens gets its own, and the first draw has none",
+    "choices: labelled options, recommended first, Other with its text, a note, and multi-select",
+    "questions: an answered question locks on Send, stays readable, and only a follow-up stays open",
+    "bar: one row when it fits, a clean split when it does not, and no control ever wraps",
+    "finished page: green bar and back link; Copy results goes back to the folder",
+    "copy results keeps the Copy results format",
+    "mark unanswered Yes fills only open items and saves them",
+    "confirm: Yes asks first, Cancel and Escape leave it unanswered, Confirm saves, locks and collapses it",
+    "confirm: after the lock the answer is fixed but the note stays editable, and it survives a reload",
+    "reopen: a reason is required, then the Yes unlocks, the reason shows and the item is open again",
+    "confirm: only Yes asks; No, Changes, Skip, questions and choices work as before",
+    "confirm: a Yes locked in another tab refuses this tab's change, says so and redraws locked",
+    "diff item: server-drawn word diff with the Diff | Final switch",
+    "pictures open in the picture pop-out; How to test sits inline, collapsed, and opens in place with Copy buttons",
+    "links: a page link in an item opens a new window, in the page and in How to test; # anchors and pictures don't",
+    "history lists closed rounds; Save round now opens the next round",
+    "send: partial confirm, an inbox file, and the delivery state",
+    "thread: earlier answers and replies show under the item",
+    "thread: filed, reopen, unblock and won't fix read at a glance; a long thread folds its oldest entries",
+    "delivery: sent to a listening agent, picked up, then the agent's reply, in the bar",
+    "sent: a banner says it reached the inbox, only what was sent locks, and an update unlocks it live",
+    "sent: nobody listening says so on the page, and Unlock opens it again",
+    "sent: a Yes it carried stays locked after the update, a handled Changes clears, and both stay on record",
+    "reopened Yes: shows unanswered, and one Yes clears it",
+    "restart: Restart from a checkpoint asks first, opens a new round and carries the steps",
+    "restart: the restart shows its own delivery state",
+    "live: a change on the server redraws without a reload, after typing stops, keeping the note and scroll",
+    "reference page: blocks render and there is no answer bar",
+    "mixed page: a section, a two-answer section, a question, a choice, a step and an info item each answer their own way",
+    "example pages: every page in example/demo renders, and the answerable ones answer",
+]
+
+T0 = "2026-10-26T07:42:10-04:00"
+SECTIONS = [{"id": f"r{n}", "title": t, "body": [{"p": f"{t}."}]}
+            for n, t in ((1, "A module repo"), (2, "The web app"), (3, "The platform repos"), (4, "Shared config"))]
+
+
+def review(title, **extra):
+    return {"schema": "handoff.page/v1", "kind": "review", "title": title, "items": [dict(i) for i in SECTIONS], **extra}
+
+
+BACKLOG = {"schema": "handoff.page/v1", "kind": "backlog", "title": "Backlog",
+           "options": {"choices": [{"value": "start", "label": "Start"}, {"value": "hold", "label": "Hold"}], "default": "hold"},
+           "items": [{"id": "b1", "title": "Export as PDF"}, {"id": "b2", "title": "Dark theme"}, {"id": "b3", "title": "Single sign-on"}]}
+
+CHECKLIST = {"schema": "handoff.page/v1", "kind": "checklist", "title": "Checklist", "build": "1.2.3", "items": [
+    {"id": "c1", "title": "One"}, {"id": "c2", "title": "Two"}, {"id": "c3", "title": "Three"},
+    {"id": "c4", "title": "Four", "dependsOn": ["c2"]}, {"id": "c5", "title": "Five"},
+    {"id": "q1", "type": "question", "title": "Which port?", "suggested": "5390"}]}
+
+MEDIA = {"schema": "handoff.page/v1", "kind": "checklist", "title": "Media", "build": "2.0.0", "items": [
+    {"id": "m1", "title": "Login screen", "body": [{"image": "img/settings-tabs-top.svg", "alt": "Tabs across the top"}],
+     "howto": [{"olist": ["Run it:"]}, {"code": "./install.sh"}]}]}
+
+JOURNEY = {"schema": "handoff.page/v1", "kind": "journey", "title": "Journey", "build": "app 1", "items": [
+    {"id": "j1", "title": "Install", "steps": ["Run the installer"], "checkpoint": "after-install"},
+    {"id": "j2", "title": "Order", "steps": ["Order a laptop"]}]}
+
+DIFFS = {"schema": "handoff.page/v1", "kind": "review", "title": "Diffs", "items": [
+    {"id": "d1", "type": "diff", "title": "Situation", "old": "It never closes. The core ran at 10 Gb/s.",
+     "new": "It never closes. The core ran at 20 Gb/s."}]}
+
+REFERENCE = {"schema": "handoff.page/v1", "kind": "reference", "title": "Notes", "items": [
+    {"id": "n1", "title": "Email draft", "body": [{"p": "Hello **team**."}, {"copy": "Dear team,"}, {"table": [["A", "B"], ["1", "2"]]}]}]}
+
+
+MIXED = {"schema": "handoff.page/v1", "kind": "review", "title": "Mixed",
+         "options": {"choices": [{"value": "start", "label": "Start"}, {"value": "hold", "label": "Hold"}], "default": "hold"},
+         "items": [{"id": "s1", "title": "Defaults look right"},
+                   {"id": "s2", "title": "Keep the old name", "answers": ["yes", "no"]},
+                   {"id": "q1", "type": "question", "title": "Which timezone?", "suggested": "UTC"},
+                   {"id": "c1", "type": "choice", "title": "Import the old data"},
+                   {"id": "j1", "type": "step", "title": "Run the installer", "steps": ["Run it"]},
+                   {"id": "i1", "type": "info", "title": "Background", "body": [{"p": "Read this first."}]}]}
+
+
+def write_pages(root):
+    demo = root / "demo"
+    w = pagefile.write_definition
+    for name in ("pf-review-1", "pf-review-2", "pf-review-3", "pf-fin", "pf-copyres", "pf-mark", "pf-send", "pf-live"):
+        w(demo / f"{name}.json", review(name), now=T0)
+    for n in (1, 2):
+        w(demo / f"pf-fin-{n}.json", {"schema": "handoff.page/v1", "kind": "review", "title": "Fin", "items": [
+            {"id": "a", "title": "A"}, {"id": "b", "title": "B"}]}, now=T0)
+    w(demo / "pf-copyroute.json", review("Copy route"), now=T0)
+    pagefile.set_route(demo / "pf-copyroute.json", "ops", "copy")
+    w(demo / "pf-saved.json", review("Saved"), now=T0)
+    pagefile.save_answers(demo / "pf-saved.json", {"r1": {"answer": "yes", "note": ""}}, by="Alex", now=T0)
+    w(demo / "pf-check.json", CHECKLIST, now=T0)
+    w(demo / "pf-unblock.json", CHECKLIST, now=T0)
+    pagefile.save_answers(demo / "pf-check.json", {"c1": {"answer": "yes", "note": ""}, "c5": {"answer": "yes", "note": ""}},
+                          by="Alex", now=T0)
+    pagefile.new_round(demo / "pf-check.json", results="Round 1 text", now=T0)
+    pagefile.reply(demo / "pf-check.json", "c5", "app", "Fixed in #70.", action="reopen", reason="fixed in #70", now=T0)
+    w(demo / "pf-question.json", CHECKLIST, now=T0)
+    w(demo / "pf-skip.json", {"schema": "handoff.page/v1", "kind": "questions", "title": "Asks", "skippable": True, "items": [
+        {"id": "q1", "title": "Which day?"}]}, now=T0)
+    w(demo / "pf-backlog.json", BACKLOG, now=T0)
+    for name in ("pf-lock-1", "pf-lock-2", "pf-lock-3", "pf-lock-5"):
+        w(demo / f"{name}.json", review(name), now=T0)
+    for name, note in (("pf-lock-2", "First thought"), ("pf-lock-3", "Fine")):
+        pagefile.save_answers(demo / f"{name}.json", {"r1": {"answer": "yes", "note": note, "locked": True}}, by="Alex", now=T0)
+    w(demo / "pf-lock-4.json", MIXED, now=T0)
+    w(demo / "pf-theme.json", review("Theme"), now=T0)
+    w(demo / "pf-media.json", MEDIA, now=T0)
+    w(demo / "pf-diff.json", DIFFS, now=T0)
+    w(demo / "pf-history.json", review("History"), now=T0)
+    pagefile.save_answers(demo / "pf-history.json", {"r1": {"answer": "no", "note": "Too vague"}}, by="Alex", now=T0)
+    pagefile.new_round(demo / "pf-history.json", results="Round 1: History\n- [r1] NO: A module repo", now=T0)
+    w(demo / "pf-thread.json", review("Thread"), now=T0)
+    pagefile.save_answers(demo / "pf-thread.json", {"r1": {"answer": "changes", "note": "Name the module"}}, by="Alex", now=T0)
+    pagefile.new_round(demo / "pf-thread.json", now=T0)
+    pagefile.reply(demo / "pf-thread.json", "r1", "app", "Renamed to core.", action="fixed", now=T0)
+    pagefile.reply(demo / "pf-thread.json", "_page", "app", "Round 2 is ready.", now=T0)
+    w(demo / "pf-journey.json", JOURNEY, now=T0)
+    pagefile.save_answers(demo / "pf-journey.json", {"j1": {"answer": "yes", "note": ""}, "j2": {"answer": "no", "note": "Broken"}},
+                          by="Alex", now=T0)
+    w(demo / "pf-thread2.json", review("Thread 2"), now=T0)
+    t2 = demo / "pf-thread2.json"
+    pagefile.save_answers(t2, {"r1": {"answer": "no", "note": "Broken on a phone"}}, by="Alex", now=T0)
+    pagefile.new_round(t2, now="2026-10-26T08:00:00-04:00")
+    pagefile.reply(t2, "r1", "ops", "Filed it.", action="filed", ref="example-org/app#70", now="2026-10-26T08:01:00-04:00")
+    pagefile.reply(t2, "r1", "app", "Fixed in #70.", action="fixed", now="2026-10-26T08:02:00-04:00")
+    pagefile.reply(t2, "r1", "app", "Ready to look at again.", action="reopen", reason="fixed in #70", now="2026-10-26T08:03:00-04:00")
+    pagefile.reply(t2, "r1", "app", "The build is up.", action="unblock", now="2026-10-26T08:04:00-04:00")
+    pagefile.reply(t2, "r1", "app", "The tablet layout stays as it is.", action="wontfix", now="2026-10-26T08:05:00-04:00")
+    for name in ("pf-moment", "pf-dlv-sent", "pf-dlv-taken", "pf-dlv-replied", "pf-held", "pf-held-deaf", "pf-held-after", "pf-reopened"):
+        w(demo / f"{name}.json", review(name), now=T0)
+        pagefile.set_route(demo / f"{name}.json", "app", "send")
+    pagefile.set_route(demo / "pf-held-deaf.json", "nobody", "send")
+    after = demo / "pf-held-after.json"
+    pagefile.save_answers(after, {"r1": {"answer": "yes", "note": ""}, "r2": {"answer": "changes", "note": "Move it"}}, by="Sam", now=T0)
+    pagefile.add_submission(after, {"kind": "send", "to": "app", "items": ["r1", "r2"], "file": "y-{n}.json"}, now=T0)
+    pagefile.hold(after, 1)
+    pagefile.reply(after, "r2", "app", "Moved.", action="fixed", now="2026-10-26T08:00:00-04:00")
+    long = demo / "pf-bar-long.json"
+    w(long, review("pf-bar-long"), now=T0)
+    pagefile.set_route(long, "a" * 41, "send")
+    pagefile.add_submission(long, {"kind": "send", "to": "a" * 41, "file": "l-{n}.json"}, now=T0)
+    told = "Everything in this round is fixed, and here is a very long account of how. " * 6
+    pagefile.reply(long, "_page", "a" * 41, told, now="2026-10-26T08:00:00-04:00")
+    count = demo / "pf-bar-count.json"
+    w(count, {"schema": "handoff.page/v1", "kind": "review", "title": "Count", "items": [
+        {"id": f"k{n}", "title": f"Item {n}", **({"dependsOn": ["k9"]} if n in (1, 2) else {})} for n in range(1, 11)]}, now=T0)
+    pagefile.set_route(count, "a" * 41, "send")
+    pagefile.save_answers(count, {f"k{n}": {"answer": "yes", "note": ""} for n in (6, 7, 8)}, by="Sam", now=T0)
+    pagefile.add_submission(count, {"kind": "send", "to": "a" * 41, "items": ["k6", "k7", "k8"], "file": "c-{n}.json"}, now=T0)
+    pagefile.mark_taken(count, 1, at="2026-10-26T07:43:00-04:00")
+    pagefile.write_definition(count, {"schema": "handoff.page/v1", "kind": "review", "title": "Count", "summary": "Back", "items": [
+        {"id": f"k{n}", "title": f"Item {n}", **({"dependsOn": ["k9"]} if n in (1, 2) else {})} for n in range(1, 11)]}, now=T0)
+    w(demo / "pf-listeners.json", review("Listeners"), now=T0)
+    pagefile.set_route(demo / "pf-listeners.json", "app", "send")
+    board = {"schema": "handoff.page/v1", "kind": "backlog", "title": "Board", "droppable": True,
+             "options": {"choices": [{"value": "start", "label": "Start"}, {"value": "hold", "label": "Hold"}], "default": "hold"},
+             "items": [{"id": f"b{n}", "title": f"Backlog {n}: Thing number {n}"} for n in range(1, 16)]}
+    (root / "backlog").mkdir(exist_ok=True)
+    w(root / "backlog" / "board.json", {**board, "items": board["items"][:8]}, now=T0)
+    long_item = {"id": "b1", "title": "Backlog 1: A long one", "body": [
+        {"p": "The summary line, kept visible."},
+        {"details": "Details", "body": [{"p": "**Why:** it blocks the release."}, {"list": ["first point", "second point"]},
+                                        {"p": "A closing line."}]}]}
+    short_item = {"id": "b2", "title": "Backlog 2: Short", "body": [{"p": "One line."}]}
+    w(demo / "pf-board-long.json", {**board, "items": [long_item, short_item]}, now=T0)
+    w(demo / "pf-board.json", board, now=T0)
+    pagefile.set_route(demo / "pf-board.json", "app", "send")
+    w(demo / "pf-ownchoice.json", {"schema": "handoff.page/v1", "kind": "review", "title": "Own choices", "items": [
+        {"id": "r1", "type": "choice", "title": "When do we restart?", "choices": [
+            {"value": "tonight", "label": "Tonight"}, {"value": "weekend", "label": "At the weekend"}]},
+        {"id": "r2", "type": "choice", "title": "Which region first?", "choices": [
+            {"value": "eu", "label": "EU"}, {"value": "us", "label": "US"}]}]}, now=T0)
+    pagefile.set_route(demo / "pf-ownchoice.json", "app", "send")
+    w(demo / "pf-board-2.json", board, now=T0)
+    pagefile.set_route(demo / "pf-board-2.json", "app", "send")
+    rn = demo / "pf-reopen-note.json"
+    w(rn, review("Reopen note"), now=T0)
+    pagefile.save_answers(rn, {"r1": {"answer": "yes", "note": "the box is not centered"},
+                               "r2": {"answer": "yes", "note": "old note two"}}, by="Sam", now=T0)
+    pagefile.reply(rn, "r1", "app", "Centered it.", action="reopen", reason="fixed in 1.2", now="2026-10-26T08:00:00-04:00")
+    pagefile.reply(rn, "r2", "app", "Changed it.", action="reopen", reason="changed", now="2026-10-26T08:00:01-04:00")
+    reo = demo / "pf-reopened.json"
+    pagefile.save_answers(reo, {"r1": {"answer": "yes", "note": ""}}, by="Sam", now=T0)
+    pagefile.reply(reo, "r1", "app", "Look again.", action="reopen", reason="numbers moved", now="2026-10-26T08:00:00-04:00")
+    samples.load(str(demo), route="app")
+    (root / "_inbox" / "app").mkdir(parents=True, exist_ok=True)
+    (root / "_inbox" / "app" / ".listening").write_text(str(os.getpid()))
+    for name in ("pf-dlv-taken", "pf-dlv-replied"):
+        pagefile.add_submission(demo / f"{name}.json", {"kind": "send", "to": "app", "file": "x-{n}.json"}, now=T0)
+        pagefile.mark_taken(demo / f"{name}.json", 1, at="2026-10-26T07:43:00-04:00")
+    pagefile.reply(demo / "pf-dlv-replied.json", "_page", "app", "All fixed, round 2 is ready.", now="2026-10-26T07:50:00-04:00")
+    w(demo / "pf-journey2.json", JOURNEY, now=T0)
+    pagefile.save_answers(demo / "pf-journey2.json", {"j1": {"answer": "yes", "note": ""}}, by="Alex", now=T0)
+    w(demo / "pf-bar.json", review("pf-bar"), now=T0)
+    pagefile.set_route(demo / "pf-bar.json", "app", "send")
+    pagefile.add_submission(demo / "pf-bar.json", {"kind": "send", "to": "app", "file": "x-{n}.json"}, now=T0)
+    pagefile.mark_taken(demo / "pf-bar.json", 1, at="2026-10-26T07:43:00-04:00")
+    pagefile.reply(demo / "pf-bar.json", "_page", "app", "All fixed, round 2 is ready, and the notes on the module names are in the "
+                   "thread below.", now="2026-10-26T07:50:00-04:00")
+    w(demo / "pf-reference.json", REFERENCE, now=T0)
+    w(demo / "pf-mixed.json", MIXED, now=T0)
+
+
+@pytest.fixture(scope="module")
+def smoke(tmp_path_factory):
+    chrome = find_chrome()
+    if not chrome:
+        pytest.skip("Chrome or Chromium is not installed")
+    tmp = tmp_path_factory.mktemp("pagesmoke")
+    root = tmp / "site"
+    shutil.copytree(ROOT / "template", root)
+    for d in ("demo", "guide"):
+        shutil.copytree(ROOT / "example" / d, root / d)
+    shutil.copytree(ROOT / "example" / "custom", root / "custom", dirs_exist_ok=True)
+    shutil.copy(ROOT / "example" / "site.json", root / "site.json")
+    cfg = json.loads((root / "site.json").read_text())
+    cfg["folders"] += [{"id": "backlog", "name": "Backlog", "blurb": "Everything waiting to be done", "board": True, "landing": "board"}]
+    cfg["redirects"] = {"/demo/old-board": "/backlog/board"}
+    (root / "site.json").write_text(json.dumps(cfg))
+    shutil.copy(HARNESS, root / "harness.html")
+    write_pages(root)
+    port = free_port()
+    proc = subprocess.Popen([sys.executable, str(root / "_site" / "serve.py"), str(port), "--bind", "127.0.0.1",
+                             "--directory", str(root)], stderr=subprocess.DEVNULL)
+    base = f"http://127.0.0.1:{port}"
+    try:
+        for _ in range(100):
+            try:
+                urllib.request.urlopen(base + "/", timeout=1)
+                break
+            except OSError:
+                time.sleep(0.05)
+        r = subprocess.run([chrome, "--headless=new", "--disable-gpu", "--no-sandbox", "--no-first-run",
+                            f"--user-data-dir={tmp / 'profile'}", "--virtual-time-budget=180000", "--dump-dom",
+                            f"{base}/harness.html"], capture_output=True, text=True, timeout=300)
+        m = re.search(r'<pre id="out">(.*?)</pre>', r.stdout, re.S)
+        assert m, r.stdout[-2000:] + r.stderr[-2000:]
+        data = json.loads(html.unescape(m.group(1)))
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)
+    assert "harness" not in data, data["harness"]
+    data["_root"] = str(root)
+    return data
+
+
+@pytest.mark.parametrize("name", SCENARIOS)
+def test_page_smoke(smoke, name):
+    assert smoke.get(name) == "ok", smoke.get(name, "did not run")
+
+
+def test_the_blocker_and_the_send_reached_the_inbox(smoke):
+    inbox = Path(smoke["_root"]) / "_inbox" / "ops"
+    subs = [json.loads(p.read_text()) for p in sorted(inbox.glob("*.json"))]
+    kinds = {(s["page"], s["kind"]) for s in subs}
+    assert ("demo/pf-review-2", "blocker") in kinds and ("demo/pf-send", "send") in kinds
+    blocker = next(s for s in subs if s["kind"] == "blocker")
+    assert blocker["items"][0]["id"] == "r1" and blocker["items"][0]["blocker"] is True
+    assert blocker["results"].startswith("BLOCKER: ")

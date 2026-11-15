@@ -1,0 +1,9 @@
+# Example private-terms file. Copy it to ~/.config/warren/terms/<name>.txt (or point
+# WARREN_TERMS_DIR at another folder) and replace the terms below with your own.
+# Never commit your real list. These are placeholder terms only.
+#
+# One term per line, matched case-insensitively as a substring.
+# A line starting with re: is a regular expression. Blank lines and # lines are ignored.
+acme widgets
+example-client
+re:\bproject-placeholder-\d+\b
