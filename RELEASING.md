@@ -14,8 +14,7 @@ How a release of ai-warren is cut. Only the maintainer tags and publishes.
 - **The marketplace version follows the highest plugin version.**
   `tests/warren/versions.test.sh` fails the PR when `metadata.version` in
   `.claude-plugin/marketplace.json` differs from it. Set it in the PR that bumps a plugin.
-- **The first public release is v1.0.0.** The marketplace and every plugin start at 1.0.0; the
-  previous repo's tags do not carry over.
+- **The first public release is v1.0.0.** The marketplace and every plugin start at 1.0.0.
 - **The tag does not have to match the marketplace or any plugin version.** It numbers the CLI
   binaries and nothing else.
 - Org and personal plugins (see the README) carry no version and track their default branch. Only
