@@ -54,4 +54,28 @@ mkdir -p .github; printf 'old\n' > .github/release-drafter.yml
 ov extends-owner
 assert_eq "$(present .github/release-drafter.yml)" no "extends owner -> local release-drafter config removed"
 assert_eq "$(cat .github/FUNDING.yml)" "github: [extends-owner]" "funding setting -> FUNDING.yml"
+
+# The files the shared PR Checks workflow sources land with the governance, so a new repo's first PR can pass.
+w="$(mktmp)"; cd "$w" || exit 1
+git init -q
+ov
+assert_eq "$(present .claude/hooks/lib.sh)" yes "the hook library PR Checks sources is laid down"
+assert_eq "$(present .claude/hooks/forbidden-text.txt)" yes "the forbidden-text list it reads is laid down"
+assert_eq "$(bash -c 'source .claude/hooks/lib.sh && type -t gov_find_emoji gov_find_file_tells | tr "\n" " "')" "function function " "the library defines what the workflow calls"
+printf 'hello\n' > ok.txt
+assert_eq "$(bash -c 'source .claude/hooks/lib.sh && gov_find_file_tells ok.txt')" "" "a clean file passes the tell check"
+assert_eq "$(git check-ignore .claude/hooks/lib.sh .claude/hooks/forbidden-text.txt | wc -l | tr -d ' ')" 0 "they are tracked, not ignored"
+
+# A repo whose .gitignore ignores .claude still tracks them.
+w="$(mktmp)"; cd "$w" || exit 1
+git init -q
+printf '.claude/\n' > .gitignore
+ov
+assert_eq "$(git check-ignore .claude/hooks/lib.sh .claude/hooks/forbidden-text.txt | wc -l | tr -d ' ')" 0 "an ignored .claude folder still tracks the two files"
+
+# A repo's own forbidden-text list is kept too.
+w="$(mktmp)"; cd "$w" || exit 1
+git init -q; mkdir -p .claude/hooks; printf 'mine\n' > .claude/hooks/forbidden-text.txt
+ov
+assert_eq "$(cat .claude/hooks/forbidden-text.txt)" mine "an existing forbidden-text list is left alone"
 finish

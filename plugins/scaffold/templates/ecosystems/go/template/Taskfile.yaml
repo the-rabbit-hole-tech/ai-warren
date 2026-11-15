@@ -34,7 +34,7 @@ tasks:
       - |
         unformatted="$(gofmt -l .)"
         if [ -n "$unformatted" ]; then echo "gofmt needed on:"; echo "$unformatted"; exit 1; fi
-      - golangci-lint run
+      - golangci-lint run --allow-parallel-runners
       - yamllint .
   lint-init:
     desc: Install lint dependencies (golangci-lint is built with the local Go toolchain)
