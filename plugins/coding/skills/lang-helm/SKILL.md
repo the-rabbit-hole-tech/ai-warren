@@ -12,3 +12,4 @@ The global rules come first; this adds Helm / Kubernetes detail and never overri
 - Umbrella charts the owner releases (more than one app) are exempt: their `appVersion` is the umbrella's own.
 - Umbrella charts pull upstream charts in as dependencies and don't copy or extract their contents, unless something has to be fixed.
 - When an upstream chart needs a fix, propose it to the owner first. On a Yes, file the upstream issue and, if time allows, write the PR from a fork (`_forks/<repo>` under the code root, topic `forked`). The fork work follows the upstream contributing guide plus the global identity, voice and no-attribution rules.
+- **Postgres on Kubernetes is always `Bugs5382/helm-postgres-ha`.** CloudNativePG (CNPG) is never used, proposed or installed, in any design, chart, plan or brief; replace any existing mention.
