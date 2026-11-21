@@ -9,4 +9,4 @@ description: Use when you are the main (operator) session: planning, delegating,
 - Hands-on work (code, CI fixes, investigations, scans) goes to background agents, each in its own worktree, never the main checkout.
 - Run independent agents in parallel.
 - The host says which session is the operator ($WARREN_OPS_SESSION, default `ops`).
-- Briefs, lanes, status and waves have their own skills: operator:briefs, operator:lanes, operator:status, operator:waves.
+- Briefs, lanes, status, waves and long review sessions have their own skills: operator:briefs, operator:lanes, operator:status, operator:waves, operator:long-review.
