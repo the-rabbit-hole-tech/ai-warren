@@ -11,3 +11,11 @@ adapters/handoff-web is derived from claude-handoff-web
 
 The full MIT licence text is in adapters/handoff-web/LICENSE. That directory stays under the MIT
 License; the rest of this repository is Apache-2.0.
+
+plugins/github/addons/humanizer is a pinned copy of blader/humanizer
+(https://github.com/blader/humanizer, commit a32f244), which is distributed under the MIT License:
+
+  Copyright (c) 2025 Siqi Chen
+
+The full MIT licence text is in plugins/github/addons/humanizer/LICENSE. That directory stays under
+the MIT License.
