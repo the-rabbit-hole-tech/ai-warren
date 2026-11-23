@@ -1,2 +1,14 @@
-ai-tell Claude%20Code README.md  # this marketplace is for that coding CLI, so the docs name it
-ai-tell Claude%20Code RELEASING.md  # same: the release guide names the product
+# The pinned humanizer add-on quotes the phrases it teaches people to remove. Allowed for that one copied file only (ai-warren#20).
+# Values are encoded so this list never trips the gate itself: %20 is a space, %27 an apostrophe, %21 an exclamation mark.
+ai-tell in%20this%20session plugins/github/addons/humanizer/SKILL.upstream.md
+ai-tell It%27s%20not%20just%20about plugins/github/addons/humanizer/SKILL.upstream.md
+ai-tell without%20further%20ado plugins/github/addons/humanizer/SKILL.upstream.md
+ai-tell Let%27s%20dive%20in plugins/github/addons/humanizer/SKILL.upstream.md
+ai-tell let%27s%20break%20this%20down plugins/github/addons/humanizer/SKILL.upstream.md
+ai-tell plays%20a%20key%20role plugins/github/addons/humanizer/SKILL.upstream.md
+ai-tell plays%20a%20crucial%20role plugins/github/addons/humanizer/SKILL.upstream.md
+ai-tell I%20hope%20this%20helps plugins/github/addons/humanizer/SKILL.upstream.md
+ai-tell hope%20this%20helps plugins/github/addons/humanizer/SKILL.upstream.md
+ai-tell Certainly%21 plugins/github/addons/humanizer/SKILL.upstream.md
+ai-tell Great%20question plugins/github/addons/humanizer/SKILL.upstream.md
+ai-tell Let%20me%20know%20if%20you plugins/github/addons/humanizer/SKILL.upstream.md
