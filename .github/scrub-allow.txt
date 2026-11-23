@@ -1,3 +1,6 @@
+ai-tell Claude%20Code README.md  # this marketplace is for that coding CLI, so the docs name it
+ai-tell Claude%20Code RELEASING.md  # same: the release guide names the product
+
 # The pinned humanizer add-on quotes the phrases it teaches people to remove. Allowed for that one copied file only (ai-warren#20).
 # Values are encoded so this list never trips the gate itself: %20 is a space, %27 an apostrophe, %21 an exclamation mark.
 ai-tell in%20this%20session plugins/github/addons/humanizer/SKILL.upstream.md
