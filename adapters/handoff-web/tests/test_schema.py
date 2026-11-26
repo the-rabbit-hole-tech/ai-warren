@@ -293,3 +293,22 @@ def test_lint_warns_when_text_lists_options_but_the_item_has_none():
         {"id": "s2", "title": "Options reviewed", "body": [{"p": "We looked at the options last week."}]}]}
     assert schema.validate(doc) == [], "a warning never blocks a page"
     assert schema.lint(doc) == ["items[s1]: its text lists options, but it has no choices"]
+
+
+def test_a_journey_takes_gate_and_page_answers():
+    j = DEFAULT_ITEM["journey"]
+    assert errors(page("journey", [j], gate=True, answers=["yes", "no", "changes"])) == []
+
+
+@pytest.mark.parametrize("extra,expect", [
+    ({"gate": "yes"}, "gate: expected true or false"),
+    ({"answers": []}, "answers: expected values from yes, no, changes, skipped"),
+    ({"answers": ["ok"]}, "answers: expected values from yes, no, changes, skipped"),
+])
+def test_a_bad_gate_or_page_answers_is_named(extra, expect):
+    assert expect in errors(page("journey", [DEFAULT_ITEM["journey"]], **extra))
+
+
+def test_page_answers_are_for_a_journey_only():
+    found = errors(page("review", [DEFAULT_ITEM["review"]], answers=["yes", "changes"]))
+    assert any(e.startswith("answers: only a journey") for e in found)

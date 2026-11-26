@@ -63,6 +63,10 @@ export interface PageDoc {
   droppable?: boolean;
   /** Questions on this page can be skipped: a Skip button keeps the typed text and locks the answer until Un-skip. */
   skippable?: boolean;
+  /** A journey only: a step waits for the one before it. Without it the steps are answered in any order. */
+  gate?: boolean;
+  /** A journey only: the answers each step takes, for steps that name none. Without it a step takes Yes and Changes, shown as OK and CHANGE. */
+  answers?: string[];
   template?: string;
   deck?: boolean;
   emails?: Record<string, EmailVersion[]>;

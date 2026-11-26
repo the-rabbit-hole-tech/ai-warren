@@ -35,6 +35,9 @@ SCENARIOS = [
     "checklist: skip locks, earlier Yes locked, blocked by a dependency, reopened with its reason, question",
     "checklist: answering an item Yes unblocks the items that depend on it at once, no reload",
     "question: Use suggestion fills the answer and saves it",
+    "journey: steps answer OK or CHANGE, in any order, and Copy results reads OK and CHANGE with the note",
+    "journey: gate true holds step 2 until step 1 is answered",
+    "journey: at 390 px the two answers and the note box fit the screen",
     "question skip: Skip locks the text, the pill and Copy results say so, Un-skip gives the text back",
     "backlog: default choice, picking every item turns the bar green, saved",
     "theme toggle works on a rendered page",
@@ -173,7 +176,7 @@ def write_pages(root):
     pagefile.reply(demo / "pf-thread.json", "r1", "app", "Renamed to core.", action="fixed", now=T0)
     pagefile.reply(demo / "pf-thread.json", "_page", "app", "Round 2 is ready.", now=T0)
     w(demo / "pf-journey.json", JOURNEY, now=T0)
-    pagefile.save_answers(demo / "pf-journey.json", {"j1": {"answer": "yes", "note": ""}, "j2": {"answer": "no", "note": "Broken"}},
+    pagefile.save_answers(demo / "pf-journey.json", {"j1": {"answer": "yes", "note": ""}, "j2": {"answer": "changes", "note": "Broken"}},
                           by="Alex", now=T0)
     w(demo / "pf-thread2.json", review("Thread 2"), now=T0)
     t2 = demo / "pf-thread2.json"
@@ -247,6 +250,9 @@ def write_pages(root):
         pagefile.add_submission(demo / f"{name}.json", {"kind": "send", "to": "app", "file": "x-{n}.json"}, now=T0)
         pagefile.mark_taken(demo / f"{name}.json", 1, at="2026-10-26T07:43:00-04:00")
     pagefile.reply(demo / "pf-dlv-replied.json", "_page", "app", "All fixed, round 2 is ready.", now="2026-10-26T07:50:00-04:00")
+    w(demo / "pf-journey3.json", JOURNEY, now=T0)
+    w(demo / "pf-journey5.json", JOURNEY, now=T0)
+    w(demo / "pf-journey4.json", {**JOURNEY, "gate": True}, now=T0)
     w(demo / "pf-journey2.json", JOURNEY, now=T0)
     pagefile.save_answers(demo / "pf-journey2.json", {"j1": {"answer": "yes", "note": ""}}, by="Alex", now=T0)
     w(demo / "pf-bar.json", review("pf-bar"), now=T0)

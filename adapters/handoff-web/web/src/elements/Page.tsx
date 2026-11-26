@@ -6,7 +6,7 @@ import { Contents } from "@/elements/Contents";
 import { Footer } from "@/elements/Footer";
 import { Held } from "@/elements/Held";
 import { History } from "@/elements/History";
-import { Item } from "@/elements/Item";
+import { Item, optionsFor } from "@/elements/Item";
 import { ActionEntry } from "@/elements/ItemMore";
 import { JumpBar, OpenIds } from "@/elements/JumpBar";
 import { Restart } from "@/elements/Restart";
@@ -26,6 +26,8 @@ import { usePage } from "@/lib/usePage";
 import type { ItemDef, Locals, PageData } from "@/lib/types";
 
 const LOUD: Record<string, string> = { yes: "YES", no: "NO", chg: "CHANGES", skip: "SKIPPED (locked)", risk: "ACCEPT RISK" };
+/** A journey reads OK and CHANGE in its results. */
+const loud = (v: string, journey: boolean) => (journey ? { yes: "OK", chg: "CHANGE" }[v] : undefined) ?? LOUD[v];
 
 function tally(data: PageData, list: ItemDef[], s: Locals): string {
   const opts = data.page.options?.choices ?? [], def = data.page.options?.default ?? "";
@@ -42,14 +44,14 @@ export function resultsOf(data: PageData, s: Locals, blocked: Record<string, str
   for (const it of answerable.filter(x => t(x) !== "question")) {
     const l = s[it.id] ?? {}, pick = l.v || p.options?.default || "";
     const own = (x: string) => (x === "other" ? `OTHER (${(l.o ?? "").replace(/\n/g, " ")})` : (it.choices?.find(c => c.value === x)?.label ?? x).toUpperCase());
-    const ans = it.choices ? (l.v ? l.v.split(",").map(own).join(", ") : "NOT ANSWERED") : t(it) === "choice" ? (pick ? label(pick).toUpperCase() : "NOT ANSWERED") : (LOUD[l.v ?? ""] ?? "NOT ANSWERED") + (l.confirmed && l.v === "yes" ? " (locked)" : "");
+    const ans = it.choices ? (l.v ? l.v.split(",").map(own).join(", ") : "NOT ANSWERED") : t(it) === "choice" ? (pick ? label(pick).toUpperCase() : "NOT ANSWERED") : (loud(l.v ?? "", p.kind === "journey") ?? "NOT ANSWERED") + (l.confirmed && l.v === "yes" ? " (locked)" : "");
     const fix = data.states[it.id]?.fixing;
     out += `- [${it.id}] ${fix ? `FIX IN PROGRESS (${fix}), ` : blocked[it.id] ? `BLOCKED by ${blocked[it.id]}, ` : ""}${l.blocker ? "BLOCKER, " : ""}${ans}: ${it.title}${l.n ? `\n    Note: ${l.n.replace(/\n/g, " ")}` : ""}\n`;
   }
   const ync = answerable.filter(it => t(it) !== "question" && t(it) !== "choice");
   const counted = ync.filter(it => !s[it.id]?.locked), yes = counted.filter(it => DONE.includes(s[it.id]?.v ?? "")).length;
   out += "\n";
-  if (counted.length || !choices.length) out += (yes === counted.length ? `APPROVED: every item is Yes${p.kind === "round" ? " or Accept risk" : ""}.` : `Not approved yet: ${yes} of ${counted.length} are Yes.`) + "\n";
+  if (counted.length || !choices.length) out += (yes === counted.length ? `APPROVED: every item is ${p.kind === "journey" ? "OK" : "Yes"}${p.kind === "round" ? " or Accept risk" : ""}.` : `Not approved yet: ${yes} of ${counted.length} are ${p.kind === "journey" ? "OK" : "Yes"}.`) + "\n";
   const picks = tally(data, choices, s);
   if (picks) out += picks + "\n";
   const qOpen = qs.filter(it => !s[it.id]?.skipped && !(s[it.id]?.a ?? "").trim()).length;
@@ -126,6 +128,7 @@ export function Page() {
 
   if (!data || !model || !c) return <main className="wrap" id="page"><p className="muted">{pg.saved || "Loading…"}</p></main>;
   const { p, r, blocked, hidden, held, sub, fixingN } = model;
+  const journey = p.kind === "journey";
   // A fix in progress keeps the page from approved, as the server's count does: the item isn't answered.
   const approved = c.approved && !fixingN;
   const sends = data.route.mode !== "copy", to = data.route.to;
@@ -146,7 +149,7 @@ export function Page() {
   const sendItem = async (it: ItemDef) => {
     if (!(await flush())) { alert("Can't send yet: the answers aren't saved. Try again once it says Saved."); return; }
     const l = live.current[it.id] ?? {};
-    const out = `Item: ${p.title} (/${rel}${p.build ? ", build " + p.build : ""})\n- [${it.id}] ${LOUD[l.v ?? ""] ?? "NOT ANSWERED"}: ${it.title}${l.n ? `\n    Note: ${l.n.replace(/\n/g, " ")}` : ""}\n`;
+    const out = `Item: ${p.title} (/${rel}${p.build ? ", build " + p.build : ""})\n- [${it.id}] ${loud(l.v ?? "", p.kind === "journey") ?? "NOT ANSWERED"}: ${it.title}${l.n ? `\n    Note: ${l.n.replace(/\n/g, " ")}` : ""}\n`;
     try {
       const sent = await postPage("/send", { kind: "send", scope: "item", items: [it.id], results: out }) as { to: string; listening: boolean };
       await redraw();
@@ -217,7 +220,7 @@ export function Page() {
   };
   const markAll = (v: string, label: string) => {
     setPopup("");
-    const open = p.items.filter(it => { const t = typeOf(p, it); return t !== "info" && t !== "question" && t !== "choice" && !hidden.has(it.id) && !blocked[it.id] && !local[it.id]?.locked && !local[it.id]?.v && (!it.answers || it.answers.map(a => a === "changes" ? "chg" : a).includes(v)); });
+    const open = p.items.filter(it => { const t = typeOf(p, it); return t !== "info" && t !== "question" && t !== "choice" && !hidden.has(it.id) && !blocked[it.id] && !local[it.id]?.locked && !local[it.id]?.v && optionsFor(it, t, p.kind === "round", p.kind === "journey", p.answers).some(o => o.value === v); });
     if (!open.length) { alert("Every item already has an answer."); return; }
     if (!confirm(`Mark the ${open.length} unanswered item${open.length === 1 ? "" : "s"} ${label}? Items you've answered keep their answers.`)) return;
     for (const it of open) set(it.id, { ...local[it.id], v, n: local[it.id]?.n ?? "" });
@@ -281,7 +284,7 @@ export function Page() {
   });
 
   const renderItem = (it: ItemDef, n: number | string) => (
-        <Item key={it.id} item={it} n={n} skippable={p.skippable} risk={p.kind === "round"} type={typeOf(p, it)} state={data.states[it.id]} value={local[it.id] ?? {}} blockedBy={blocked[it.id]} fixing={data.states[it.id]?.fixing} dropping={data.states[it.id]?.dropping}
+        <Item key={it.id} item={it} n={n} journey={journey} pageAnswers={p.answers} skippable={p.skippable} risk={p.kind === "round"} type={typeOf(p, it)} state={data.states[it.id]} value={local[it.id] ?? {}} blockedBy={blocked[it.id]} fixing={data.states[it.id]?.fixing} dropping={data.states[it.id]?.dropping}
           droppable={!!p.droppable && typeOf(p, it) === "choice"} onDrop={() => dropItem(it)} canSendPick={pickSendable(it)} onSendPick={() => sendPick(it)} held={held.has(it.id)}
           handled={!!r.handled?.[it.id]} entries={itemEntries(data, it.id)} email={emailFor(it)} emailLabel={p.drafts ? (p.emails?.[it.id]?.length ? "Generate another email" : "Generate an email") : undefined}
           actions={[...(sendable(it) ? [{ name: "send-item", label: "Send this item", onSelect: () => void sendItem(it) }] : []), ...itemActions.map(make => make(it, data)).filter(a => a !== null)]} diffs={data.diffs} build={p.build} choices={p.options?.choices} defaultChoice={p.options?.default}
@@ -302,8 +305,8 @@ export function Page() {
       pops={<>
         <OpenIds open={openItems} choicePage={choicePage} goTo={goTo} shown={popup === "ids"} onClose={() => setPopup("")} />
         <div className="rvpop menu" role="menu" hidden={popup !== "menu"}>
-          <button className="all-yes" type="button" role="menuitem" onClick={() => markAll("yes", "Yes")}>Mark unanswered Yes</button>
-          <button className="all-no" type="button" role="menuitem" onClick={() => markAll("no", "No")}>Mark unanswered No</button>
+          <button className="all-yes" type="button" role="menuitem" onClick={() => markAll("yes", journey ? "OK" : "Yes")}>Mark unanswered {journey ? "OK" : "Yes"}</button>
+          {(!journey || p.answers?.includes("no")) && <button className="all-no" type="button" role="menuitem" onClick={() => markAll("no", "No")}>Mark unanswered No</button>}
           <button className="copy" type="button" role="menuitem" onClick={() => void doCopy()}>Copy results</button>
           <button className="copy-blockers" type="button" role="menuitem" onClick={() => void copyBlockers()}>Copy blockers only</button>
           <button className="history" type="button" role="menuitem" disabled={!rows.length} onClick={() => { setPopup(""); const h = document.getElementById("rvhist") as HTMLDetailsElement; h.open = true; h.scrollIntoView({ behavior: "smooth", block: "start" }); }}>History</button>
