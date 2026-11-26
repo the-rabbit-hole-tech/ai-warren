@@ -27,7 +27,7 @@ assert_eq "$(wf claude-code-public job-golic.yaml)" no "claude-code -> no golic 
 assert_eq "$(wf claude-code-public job-go-security.yaml)" no "claude-code -> no job-go-security"
 assert_eq "$(wf npm-public job-gitleaks.yaml)" no "no standalone gitleaks workflow"
 assert_eq "$(wf go-private scan-security.yml)" no "go private -> no duplicate scan-security"
-assert_eq "$(present "$work/go-public/.claude/hooks")" no "no repo-local Claude hooks (the guard covers them)"
+assert_eq "$(ls "$work/go-public/.claude/hooks" | tr '\n' ' ')" "forbidden-text.txt lib.sh " "no repo-local git hooks (the guard covers them), only the two files PR Checks sources"
 assert_eq "$(present "$work/go-public/init.sh")" no "no init script left in the tree"
 assert_eq "$(present "$work/go-public/.github/FUNDING.yml")" no "no sponsor file without a funding setting"
 

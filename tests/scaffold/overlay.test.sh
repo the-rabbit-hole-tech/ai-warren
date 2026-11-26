@@ -2,6 +2,7 @@
 # apply_overlay (warren-apply-governance --sync): the shared set lands, retired workflows go, and
 # the Go and npm workflows follow the manifest. Ported from the governance template's test.
 source "$(dirname "$0")/lib.sh"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 scaffold_lib
 ov() { ( org_use "${1:-Owner}"; org_env "${1:-Owner}" repo "A repo."; apply_overlay ) >/dev/null 2>&1; }
 
@@ -54,4 +55,38 @@ mkdir -p .github; printf 'old\n' > .github/release-drafter.yml
 ov extends-owner
 assert_eq "$(present .github/release-drafter.yml)" no "extends owner -> local release-drafter config removed"
 assert_eq "$(cat .github/FUNDING.yml)" "github: [extends-owner]" "funding setting -> FUNDING.yml"
+
+# The files the shared PR Checks workflow sources land with the governance, so a new repo's first PR can pass.
+w="$(mktmp)"; cd "$w" || exit 1
+git init -q
+ov
+assert_eq "$(present .claude/hooks/lib.sh)" yes "the hook library PR Checks sources is laid down"
+assert_eq "$(present .claude/hooks/forbidden-text.txt)" yes "the forbidden-text list it reads is laid down"
+assert_eq "$(bash -c 'source .claude/hooks/lib.sh && type -t gov_find_emoji gov_find_file_tells | tr "\n" " "')" "function function " "the library defines what the workflow calls"
+printf 'hello\n' > ok.txt
+assert_eq "$(bash -c 'source .claude/hooks/lib.sh && gov_find_file_tells ok.txt')" "" "a clean file passes the tell check"
+assert_eq "$(git check-ignore .claude/hooks/lib.sh .claude/hooks/forbidden-text.txt | wc -l | tr -d ' ')" 0 "they are tracked, not ignored"
+
+# A repo whose .gitignore ignores .claude still tracks them.
+w="$(mktmp)"; cd "$w" || exit 1
+git init -q
+printf '.claude/\n' > .gitignore
+ov
+assert_eq "$(git check-ignore .claude/hooks/lib.sh .claude/hooks/forbidden-text.txt | wc -l | tr -d ' ')" 0 "an ignored .claude folder still tracks the two files"
+
+# A repo's own forbidden-text list is kept too.
+w="$(mktmp)"; cd "$w" || exit 1
+git init -q; mkdir -p .claude/hooks; printf 'mine\n' > .claude/hooks/forbidden-text.txt
+ov
+assert_eq "$(cat .claude/hooks/forbidden-text.txt)" mine "an existing forbidden-text list is left alone"
+
+# Binary files are never read as text: the PR Hygiene scan skips them by content, whatever the
+# extension, and the token fill leaves them byte for byte alone.
+tpl="$(cat "$ROOT/plugins/scaffold/templates/governance/.github/workflows/job-pr-checks.yaml")"
+assert_contains "$tpl" 'grep -Iq . "$f" || continue' "PR Hygiene skips files grep treats as binary"
+w="$(mktmp)"; cd "$w" || exit 1
+mkdir t; printf '\000\001__OWNER__\377\376' > t/clip.mp3; cp t/clip.mp3 t/clip.orig; printf 'owner __OWNER__\n' > t/a.txt
+( org_use Owner; org_env Owner repo "A repo."; fill_tree "$w/t" ) >/dev/null 2>&1
+assert_eq "$(cmp -s t/clip.mp3 t/clip.orig && echo same)" same "an .mp3 is left untouched by the token fill"
+assert_contains "$(cat t/a.txt)" "owner Owner" "a text file still gets its tokens"
 finish

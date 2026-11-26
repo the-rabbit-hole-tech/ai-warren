@@ -22,6 +22,33 @@ assert_eq "$(grep -rl '__[A-Z_]*__' "$work/trees" | wc -l | tr -d ' ')" 0 "no to
 out=$(bash "$BIN/warren-new-repo" x go --dry-run 2>&1); rc=$?
 expect 1 "--dry-run without --org is refused"
 
+
+# Every file the shared PR Checks workflow sources must be in the tree, for every ecosystem and variant.
+missing=""
+for t in "$work"/trees/*/; do
+  wf="$t.github/workflows/job-pr-checks.yaml"
+  [ -f "$wf" ] || continue
+  for src in $(grep -oE 'source[[:space:]]+[.A-Za-z0-9_-]+/[.A-Za-z0-9_/-]+' "$wf" | awk '{print $2}'); do
+    [ -f "$t$src" ] || missing="$missing $(basename "$t"):$src"
+  done
+  [ -f "$t.claude/hooks/forbidden-text.txt" ] || missing="$missing $(basename "$t"):.claude/hooks/forbidden-text.txt"
+done
+assert_eq "$missing" "" "every tree has the files its PR Checks workflow sources"
+
+# Two lint jobs on one shared runner collide on golangci-lint's cache lock unless parallel runs are allowed.
+nopar=""
+for t in "$work"/trees/*/; do
+  for f in "$t"Taskfile.y*ml "$t".github/workflows/*.y*ml; do
+    [ -f "$f" ] || continue
+    while IFS= read -r line; do
+      case "$line" in *--allow-parallel-runners*) ;; *) nopar="$nopar $(basename "$t")/${f#"$t"}" ;; esac
+    done < <(grep -E 'golangci-lint run|^[[:space:]]*args:.*--timeout' "$f" | grep -v '^[[:space:]]*#')
+  done
+done
+assert_eq "$nopar" "" "every golangci-lint run in the templates allows parallel runners"
+assert_contains "$(grep -h 'golangci-lint run' "$work"/trees/r-go-lib/Taskfile.y*ml)" "--allow-parallel-runners" "the Go Taskfile lint target has the flag"
+assert_contains "$(grep -h 'args:' "$work"/trees/r-go-lib/.github/workflows/job-go-lang-ci.yaml)" "--allow-parallel-runners" "the Go lint workflow has the flag"
+
 hits="$(python3 - "$work/trees" <<'PY'
 import pathlib, re, sys
 deny = [re.compile("/" + "Users/"), re.compile("/" + "home/[a-z]", re.I)]

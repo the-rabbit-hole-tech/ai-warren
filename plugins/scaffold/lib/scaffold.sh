@@ -373,6 +373,8 @@ fill_tree() {
     case "$p" in
       *.png|*.jpg|*.jpeg|*.gif|*.pdf|*.ico|*.woff|*.woff2|*.ttf|*.zip|*.gz|*.dotx|*.potx|*.pptx) continue ;;
     esac
+    # Binary files of any extension carry no tokens to fill.
+    grep -Iq . "$p" || continue
     fill_file "$p"
   done < <(find "$dir" -path "$dir/.git" -prune -o -type f -print0)
   find "$dir" -depth -name '*__*' -not -path "$dir/.git/*" | while IFS= read -r p; do
@@ -389,6 +391,16 @@ fill_tree() {
 }
 
 # --- compose a new repo -------------------------------------------------------------------------
+
+# lay_ci_hooks <dir>: the two files the shared PR Checks workflow sources (.claude/hooks/lib.sh and the
+# forbidden-text list it reads). Only the library, not the repo-local git hooks. A repo's own copy is kept.
+lay_ci_hooks() {
+  local dir="$1" f
+  mkdir -p "$dir/.claude/hooks"
+  for f in lib.sh forbidden-text.txt; do
+    [ -f "$dir/.claude/hooks/$f" ] || cp "$GOV/.claude/hooks/$f" "$dir/.claude/hooks/$f"
+  done
+}
 
 # compose <eco> <out> <public|private> <variant> <owner>: lay the ecosystem template, the shared
 # governance and the owner's files into <out>. Tokens are left for fill_tree.
@@ -421,6 +433,7 @@ compose() {
      "$GOV/.github/SUPPORT.md" "$out/.github/"
   org_funding "$out"
   cp -R "$GOV/.github/DISCUSSION_TEMPLATE/." "$out/.github/DISCUSSION_TEMPLATE/"
+  lay_ci_hooks "$out"
   cp "$GOV/CLAUDE.repo.template.md" "$out/CLAUDE.md"
   layout_render "$out/CLAUDE.md" "$eco" "$v"
   cp "$GOV/AGENTS.repo.template.md" "$out/AGENTS.md"
@@ -464,6 +477,7 @@ apply_overlay() {
   else cp "$GOV/.github/release-drafter.yml" .github/release-drafter.yml; fi
   cp "$GOV/.github/.gitleaks.toml" ./.gitleaks.toml
   cp -R "$GOV/.github/workflows/." .github/workflows/
+  lay_ci_hooks .
   # Go repos: a repo that still carries the older, possibly adapted scan-security.yml keeps it
   # instead of job-go-security.yaml, so the two scans never run side by side.
   if [ -f go.mod ]; then
@@ -517,6 +531,10 @@ apply_overlay() {
         echo "!/.claude/"
         echo "/.claude/*"
         echo "!/.claude/settings.json"
+        echo "!/.claude/hooks/"
+        echo "/.claude/hooks/*"
+        echo "!/.claude/hooks/lib.sh"
+        echo "!/.claude/hooks/forbidden-text.txt"
         echo "!/.claude/linux-only"
       } >> .gitignore
     fi

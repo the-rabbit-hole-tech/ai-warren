@@ -87,6 +87,8 @@ jobs:
               .git/*) continue ;;
               *.png|*.jpg|*.jpeg|*.gif|*.pdf|*.ico|*.svg|*.woff|*.woff2|*.ttf|*.eot|*.zip|*.gz|*.dotx|*.potx|*.pptx) continue ;;
             esac
+            # Any file git or grep treats as binary (audio, video, fonts, archives) is never scanned as text.
+            grep -Iq . "$f" || continue
             # Emoji allowed in Markdown and .github folders (nested ones too, as the pre-commit hook allows); blocked elsewhere.
             case "$f" in
               .github/*|*/.github/*|*.md|NOTES.txt|*/NOTES.txt) : ;;
