@@ -2,6 +2,7 @@
 # apply_overlay (warren-apply-governance --sync): the shared set lands, retired workflows go, and
 # the Go and npm workflows follow the manifest. Ported from the governance template's test.
 source "$(dirname "$0")/lib.sh"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 scaffold_lib
 ov() { ( org_use "${1:-Owner}"; org_env "${1:-Owner}" repo "A repo."; apply_overlay ) >/dev/null 2>&1; }
 
@@ -78,4 +79,14 @@ w="$(mktmp)"; cd "$w" || exit 1
 git init -q; mkdir -p .claude/hooks; printf 'mine\n' > .claude/hooks/forbidden-text.txt
 ov
 assert_eq "$(cat .claude/hooks/forbidden-text.txt)" mine "an existing forbidden-text list is left alone"
+
+# Binary files are never read as text: the PR Hygiene scan skips them by content, whatever the
+# extension, and the token fill leaves them byte for byte alone.
+tpl="$(cat "$ROOT/plugins/scaffold/templates/governance/.github/workflows/job-pr-checks.yaml")"
+assert_contains "$tpl" 'grep -Iq . "$f" || continue' "PR Hygiene skips files grep treats as binary"
+w="$(mktmp)"; cd "$w" || exit 1
+mkdir t; printf '\000\001__OWNER__\377\376' > t/clip.mp3; cp t/clip.mp3 t/clip.orig; printf 'owner __OWNER__\n' > t/a.txt
+( org_use Owner; org_env Owner repo "A repo."; fill_tree "$w/t" ) >/dev/null 2>&1
+assert_eq "$(cmp -s t/clip.mp3 t/clip.orig && echo same)" same "an .mp3 is left untouched by the token fill"
+assert_contains "$(cat t/a.txt)" "owner Owner" "a text file still gets its tokens"
 finish

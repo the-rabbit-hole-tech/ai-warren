@@ -373,6 +373,8 @@ fill_tree() {
     case "$p" in
       *.png|*.jpg|*.jpeg|*.gif|*.pdf|*.ico|*.woff|*.woff2|*.ttf|*.zip|*.gz|*.dotx|*.potx|*.pptx) continue ;;
     esac
+    # Binary files of any extension carry no tokens to fill.
+    grep -Iq . "$p" || continue
     fill_file "$p"
   done < <(find "$dir" -path "$dir/.git" -prune -o -type f -print0)
   find "$dir" -depth -name '*__*' -not -path "$dir/.git/*" | while IFS= read -r p; do
