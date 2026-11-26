@@ -562,6 +562,13 @@ details.howto pre { position: relative; white-space: pre-wrap; word-break: break
 .filter .fbtn:focus-visible, .filter .fmenu :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 .filter .fmenu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; min-width: 15rem; padding: 6px; background: var(--card); color: var(--ink); border: 1px solid var(--line-2); border-radius: 12px; box-shadow: var(--pop-shadow); }
 .filter .fmenu[hidden] { display: none; }
+/* A long list scrolls inside the menu instead of running off the bottom. */
+.filter .fmenu { max-height: 70vh; overflow-y: auto; }
+/* On a phone the menu is as wide as the screen (minus a margin) so it can never open past an edge. */
+@media (max-width: 600px) {
+  .filter { position: static; }
+  .filter .fmenu { left: 12px; right: 12px; top: auto; min-width: 0; margin-top: 6px; box-sizing: border-box; }
+}
 .filter .fopt { display: flex; align-items: center; gap: .5rem; min-height: 40px; padding: 0 .6rem; border-radius: 8px; cursor: pointer; font-size: 15px; }
 .filter .fopt:hover { background: var(--accent-soft); }
 .filter .fopt .count { margin-left: auto; font: 13px var(--mono); color: var(--muted); }
