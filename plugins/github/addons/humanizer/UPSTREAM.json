@@ -1,0 +1,11 @@
+{
+  "name": "humanizer",
+  "upstream": "https://github.com/blader/humanizer",
+  "commit": "a32f24407364c74c812b43c15926d638bee1e072",
+  "version": "4.0.0",
+  "licence": "MIT",
+  "copied": "2026-11-23",
+  "files": { "SKILL.md": "SKILL.upstream.md", "LICENSE": "LICENSE" },
+  "reviewed": "2026-11-23: text only, no scripts copied or run, no network use; upstream CI and package files not copied",
+  "update_check": "compare the commit above with the upstream default branch head; review the diff before copying"
+}
