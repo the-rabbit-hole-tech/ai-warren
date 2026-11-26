@@ -13,12 +13,17 @@ const PILL: Record<string, string> = { yes: "Yes", no: "No", chg: "Changes", ski
 const TONE: Record<string, string> = { yes: "a-yes", no: "a-no", chg: "a-chg", skip: "skp", risk: "a-risk" };
 const ANS: Record<string, string> = { yes: "yes", no: "no", changes: "chg", skipped: "skip" };
 const BASE: Record<string, string[]> = { check: ["yes", "no", "chg", "skip"], step: ["yes", "no", "chg", "skip"] };
+/** A journey says OK and CHANGE where other pages say Yes and Changes; the stored answers are the same. */
+export const JOURNEY_WORDS: Record<string, string> = { yes: "OK", chg: "CHANGE" };
+export const wordFor = (value: string, journey?: boolean, table: Record<string, string> = LABEL) => (journey && JOURNEY_WORDS[value]) || table[value];
 
-export function optionsFor(it: ItemDef, type: string, risk: boolean): AnswerOption[] {
-  let set = it.answers ? it.answers.map(a => ANS[a] ?? a) : (BASE[type] ?? ["yes", "no", "chg"]);
+/** The answers a step takes: its own list, else the journey page's, else OK and CHANGE; other pages keep their sets. */
+export function optionsFor(it: ItemDef, type: string, risk: boolean, journey = false, pageAnswers?: string[]): AnswerOption[] {
+  const base = journey && type === "step" ? (pageAnswers ?? ["yes", "changes"]).map(a => ANS[a] ?? a) : (BASE[type] ?? ["yes", "no", "chg"]);
+  let set = it.answers ? it.answers.map(a => ANS[a] ?? a) : base;
   if (it.skip && !set.includes("skip")) set = [...set, "skip"];
   if (risk && !it.answers) set = [...set, "risk"];
-  return set.map(value => ({ value, label: LABEL[value] }));
+  return set.map(value => ({ value, label: wordFor(value, journey) }));
 }
 
 export interface ItemProps {
@@ -39,6 +44,9 @@ export interface ItemProps {
   /** This choice item has a pick that was not sent: a "Send this item" button sends it (and only it). */
   canSendPick?: boolean;
   onSendPick?: () => Promise<void>;
+  /** The page is a journey: Yes and Changes read OK and CHANGE, and a step with no answers of its own takes pageAnswers or those two. */
+  journey?: boolean;
+  pageAnswers?: string[];
   /** The page lets questions be skipped: Skip keeps the typed text and locks it, Un-skip gives it back. */
   skippable?: boolean;
   /** The page lets items be dropped; onDrop sends the request once the reviewer confirms. */
@@ -117,7 +125,7 @@ export function Item(p: ItemProps) {
   const confirmed = !!value.confirmed && v === "yes" && !settled;
   const softSettled = settled || confirmed;
   const locked = !!value.locked || !!blockedBy || !!held || settled || confirmed;
-  const canConfirm = !["question", "choice", "info"].includes(type) && optionsFor(it, type, !!p.risk).some(o => o.value === "yes");
+  const canConfirm = !["question", "choice", "info"].includes(type) && optionsFor(it, type, !!p.risk, p.journey, p.pageAnswers).some(o => o.value === "yes");
   const cancelConfirm = () => { setConfirming(false); setTimeout(() => card.current?.querySelector<HTMLElement>('.seg button[data-v="yes"]')?.focus()); };
   const doConfirm = () => {
     setConfirming(false);
@@ -204,7 +212,7 @@ export function Item(p: ItemProps) {
   }
 
   const showNote = v === "chg" || v === "no" || v === "risk" || !!note.trim() || !!value.blocker || noteOpen || !!value.locked || confirmed;
-  const pill = blocked ?? (confirmed ? <Chip tone="a-yes">Yes (locked)</Chip> : value.locked ? <Chip tone="skp">{PILL.skip}</Chip> : held ? <Chip tone="a-yes">Sent, waiting</Chip> : settled ? <Chip tone={v === "risk" ? "a-risk" : "a-yes"}>{v === "risk" ? "Accept risk" : "Yes"} (locked)</Chip> : v ? <Chip tone={TONE[v]}>{PILL[v]}</Chip>
+  const pill = blocked ?? (confirmed ? <Chip tone="a-yes">{wordFor("yes", p.journey)} (locked)</Chip> : value.locked ? <Chip tone="skp">{PILL.skip}</Chip> : held ? <Chip tone="a-yes">Sent, waiting</Chip> : settled ? <Chip tone={v === "risk" ? "a-risk" : "a-yes"}>{v === "risk" ? "Accept risk" : wordFor("yes", p.journey)} (locked)</Chip> : v ? <Chip tone={TONE[v]}>{wordFor(v, p.journey, PILL)}</Chip>
     : state?.reopened ? <Chip tone="reo">Reopened: {state.reopened}</Chip> : handled ? <Chip tone="reo">Updated: answer again</Chip> : <Chip>Open</Chip>);
   const pick = (a: string) => {
     // Yes asks first. Pressing the pressed Yes of an unconfirmed Yes asks too, so it can be locked.
@@ -226,7 +234,7 @@ export function Item(p: ItemProps) {
       <div className={`rv in-card ${v}` + (locked ? " locked" : "") + (confirmed ? " confirmed" : "") + (blockedBy ? " blocked" : "") + (value.blocker ? " blocker" : "") + ((v === "chg" || v === "risk") && !note.trim() ? " empty" : "")} id={"rv-" + it.id}>
         <div className="rvrow">
           <span className="ask">Your answer:</span>
-          <Answer id={it.id} options={optionsFor(it, type, !!p.risk)} value={v} disabled={locked} onChange={pick} />
+          <Answer id={it.id} options={optionsFor(it, type, !!p.risk, p.journey, p.pageAnswers)} value={v} disabled={locked} onChange={pick} />
           {!showNote && !blockedBy && <button type="button" className="add-note" disabled={locked} onClick={() => { setNoteOpen(true); setTimeout(() => ta.current?.focus()); }}>Add a note</button>}
           <span className="sp" />
           <button type="button" className="blocker-btn" disabled={!!held || settled || confirmed} title={p.blockerTitle} onClick={() => {
@@ -239,17 +247,17 @@ export function Item(p: ItemProps) {
           <textarea ref={ta} rows={3} placeholder="Notes (required for Changes and Accept risk)" value={note} disabled={locked && !confirmed} onChange={e => p.onChange({ ...value, v, n: e.target.value })} />
         </label>
         {confirming && <div className="confirm-yes" role="group" aria-labelledby={"cy-" + it.id} onKeyDown={e => { if (e.key === "Escape") { e.stopPropagation(); cancelConfirm(); } }}>
-          <p className="confirm-q" id={"cy-" + it.id}>Confirm Yes for {it.id}? This locks the answer. You can still edit the note, and reopen it later with a reason.</p>
+          <p className="confirm-q" id={"cy-" + it.id}>Confirm {wordFor("yes", p.journey)} for {it.id}? This locks the answer. You can still edit the note, and reopen it later with a reason.</p>
           <label className="notel"><span className="nlt">Note (optional)</span>
             <textarea rows={2} value={cnote} onChange={e => setCnote(e.target.value)} /></label>
           <div className="confirm-btns">
-            <button type="button" className="confirm-ok" ref={okBtn} onClick={doConfirm}>Confirm Yes</button>
+            <button type="button" className="confirm-ok" ref={okBtn} onClick={doConfirm}>Confirm {wordFor("yes", p.journey)}</button>
             <button type="button" className="confirm-cancel" onClick={cancelConfirm}>Cancel</button>
           </div>
         </div>}
         {confirmed && !reopening && <div className="reopen-row"><button type="button" className="reopen-btn" onClick={() => flushSync(() => setReopening(true))}>Reopen…</button></div>}
         {confirmed && reopening && <div className="reopen-yes" role="group" aria-labelledby={"ry-" + it.id} onKeyDown={e => { if (e.key === "Escape") { e.stopPropagation(); setReopening(false); setWhyErr(""); } }}>
-          <p className="confirm-q" id={"ry-" + it.id}>Reopen {it.id}? The Yes unlocks and the item is open again. Your reason is saved with the item.</p>
+          <p className="confirm-q" id={"ry-" + it.id}>Reopen {it.id}? The {wordFor("yes", p.journey)} unlocks and the item is open again. Your reason is saved with the item.</p>
           <label className="notel"><span className="nlt">Why are you reopening it? (required)</span>
             <textarea ref={whyTa} rows={2} value={why} aria-invalid={!!whyErr} aria-describedby={"re-" + it.id} onChange={e => { setWhy(e.target.value); setWhyErr(""); }} /></label>
           <p className="confirm-err" id={"re-" + it.id} role="alert">{whyErr}</p>

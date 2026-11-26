@@ -37,7 +37,8 @@ AGENT = re.compile(r"[a-z0-9][a-z0-9_-]{0,40}\Z")
 ID_RULE = "expected a-z, 0-9, _ and -, starting with a letter or digit, up to 41 characters"
 
 TOP = ("schema", "rev", "kind", "title", "summary", "build", "reset", "status", "route", "options", "items",
-       "rounds", "thread", "submissions", "phases", "drafts", "emails", "deck", "template", "revisions", "fixing", "droppable", "skippable")
+       "rounds", "thread", "submissions", "phases", "drafts", "emails", "deck", "template", "revisions", "fixing", "droppable", "skippable",
+       "gate", "answers")
 COMMON = ("id", "type", "title", "section", "body")
 ANSWERABLE = ("answers", "skip", "dependsOn", "blockedBy")
 TYPE_FIELDS = {
@@ -139,9 +140,15 @@ def validate(doc):
     _fixing(v, doc.get("fixing"), doc.get("items"))
     _submissions(v, doc.get("submissions"))
     _emails(v, doc.get("emails"))
-    for k in ("drafts", "deck", "droppable", "skippable"):
+    for k in ("drafts", "deck", "droppable", "skippable", "gate"):
         if k in doc and not isinstance(doc[k], bool):
             v.err(k, "expected true or false")
+    if "answers" in doc:
+        a = doc["answers"]
+        if kind != "journey":
+            v.err("answers", "only a journey takes page answers; an item sets its own with answers")
+        elif not _strlist(a) or not a or any(x not in ANSWERS[:4] for x in a):
+            v.err("answers", "expected values from " + ", ".join(ANSWERS[:4]))
     return v.errors
 
 

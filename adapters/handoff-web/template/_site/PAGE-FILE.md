@@ -69,6 +69,8 @@ The definition keys sit at the top level, and the server keys are managed by `pa
 | `items` | definition | the content, in order |
 | `phases` | definition | a round's phases: `[{"id": "A", "title": "...", "goal": "...", "dependsOn": ["A"]}]`; item ids become `A1`, `A2`, `B1` |
 | `deck` | definition | `true` adds Build a deck to the bar's More menu |
+| `gate` | definition | a journey only: `true` makes each step wait for the one before it; without it steps are answered in any order |
+| `answers` | definition | a journey only: the answers its steps take when they name none, from `yes`, `no`, `changes`, `skipped`; the default is `yes` and `changes`, shown as OK and CHANGE |
 | `template` | definition | a template from `custom/custom.js`, see `CUSTOM.md` |
 | `drafts` | definition | `true` adds Draft email to every item |
 | `emails` | server | versions of each item's email, numbered from 1 |
@@ -93,7 +95,7 @@ Answers are keyed by id, so reordering items never moves an answer.
 |---|---|---|
 | `section` | Yes / No / Changes | `body` |
 | `check` | adds Skipped | `body`, `howto`, `dependsOn`, `blockedBy` |
-| `step` | adds Skipped | `steps`, `checkpoint`, `howto`, `dependsOn`, `blockedBy` |
+| `step` | OK / CHANGE on a journey (stored as Yes / Changes), else adds Skipped | `steps`, `checkpoint`, `howto`, `dependsOn`, `blockedBy` |
 | `screen` | Yes / No / Changes | `images` (`[{src, alt, caption}]`), `fields` (`[{name, type, rule}]`), `body` |
 | `contract` | Yes / No / Changes | `fields`, `forms` (`[{name, fields}]`), `body` |
 | `diff` | Yes / No / Changes | `old`, `new`, `code` |

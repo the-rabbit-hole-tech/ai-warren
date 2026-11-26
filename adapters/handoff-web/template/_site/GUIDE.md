@@ -67,7 +67,7 @@ Pick the `kind` by what the person has to do.
 |---|---|---|---|
 | `review` | a design, plan or text to approve | Yes, No or Changes on each section, then Send | fixes what came back, and replies under each item |
 | `checklist` | signing off delivered work on a `build` | runs each How to test, answers, can Skip | files or fixes what failed, then opens a new `build` |
-| `journey` | a run of steps, each after the last | answers each step, can Restart from a checkpoint | resets the environment on a restart |
+| `journey` | a run of steps (each after the last when the page sets `gate`) | answers each step OK or CHANGE, can Restart from a checkpoint | resets the environment on a restart |
 | `backlog` | picking from a list | picks a choice on each item | starts what was picked |
 | `questions` | open questions with no fixed answers | types answers, or skips one (`"skippable": true`) | uses them, and replies; a skipped one comes as `"skipped": true` with an empty answer |
 | `reference` | something to read | nothing | keeps it up to date |

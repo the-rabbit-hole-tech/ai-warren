@@ -298,10 +298,54 @@ def test_summary_counts_open_items_like_the_bar(path):
     assert (s["open"], s["approved"]) == (0, True)
 
 
-def test_summary_runs_journey_steps_in_order(path):
+def test_journey_steps_have_no_gate_by_default(path):
     make(path, journey())
-    s = pagefile.summary(pagefile.load(path))
+    doc = pagefile.load(path)
+    s = pagefile.summary(doc)
+    assert (s["open"], s["blocked"]) == (3, 0)
+    assert pagefile.blocked_items(doc) == set()
+
+
+def test_a_journey_with_gate_runs_its_steps_in_order(path):
+    make(path, {**journey(), "gate": True})
+    doc = pagefile.load(path)
+    s = pagefile.summary(doc)
     assert (s["open"], s["blocked"]) == (1, 2)
+    assert pagefile.blocked_items(doc) == {"j2", "j3"}
+    pagefile.save_answers(path, {"j1": {"answer": "yes", "note": ""}}, by="Alex", now=T1)
+    assert pagefile.blocked_items(pagefile.load(path)) == {"j3"}
+
+
+def test_a_step_can_still_depend_on_another_without_the_gate(path):
+    d = journey()
+    d["items"][2]["dependsOn"] = ["j1"]
+    make(path, d)
+    assert pagefile.blocked_items(pagefile.load(path)) == {"j3"}
+
+
+def test_journey_steps_take_yes_and_changes_by_default(path):
+    make(path, journey())
+    doc = pagefile.load(path)
+    assert pagefile.allowed_answers(doc, doc["items"][0]) == ("yes", "changes")
+    with pytest.raises(pagefile.PageError):
+        pagefile.save_answers(path, {"j1": {"answer": "no", "note": "x"}}, by="Alex", now=T1)
+    with pytest.raises(pagefile.PageError):
+        pagefile.save_answers(path, {"j1": {"answer": "changes", "note": ""}}, by="Alex", now=T1)
+    pagefile.save_answers(path, {"j1": {"answer": "changes", "note": "Wrong colour"}}, by="Alex", now=T1)
+
+
+def test_a_journey_can_set_its_own_answers_for_every_step(path):
+    make(path, {**journey(), "answers": ["yes", "no", "changes", "skipped"]})
+    doc = pagefile.load(path)
+    assert pagefile.allowed_answers(doc, doc["items"][0]) == ("yes", "no", "changes", "skipped")
+    pagefile.save_answers(path, {"j1": {"answer": "no", "note": "Broken"}}, by="Alex", now=T1)
+
+
+def test_other_kinds_keep_their_answers(path):
+    d = {"schema": "handoff.page/v1", "kind": "checklist", "title": "C", "build": "b1", "items": [{"id": "c1", "title": "x"}]}
+    make(path, d)
+    doc = pagefile.load(path)
+    assert pagefile.allowed_answers(doc, doc["items"][0]) == ("yes", "no", "changes", "skipped")
 
 
 def test_summary_counts_backlog_choices_with_the_default(path):

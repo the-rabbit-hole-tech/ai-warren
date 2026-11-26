@@ -225,8 +225,11 @@ I pick one:
 4. The agent resets the environment (restores the snapshot, or reseeds) and replies in the thread when it's
    ready.
 
-**Order:** `dependsOn` works as it does on checks. By default a step depends on the one before it, because a
-journey runs in order. A step can opt out with `"dependsOn": []`.
+**Order:** `dependsOn` works as it does on checks. By default steps can be answered in any order. A page with
+`"gate": true` makes each step depend on the one before it; a step can opt out with `"dependsOn": []`.
+
+**Answers:** a step is answered OK or CHANGE, stored as `yes` and `changes` (CHANGE needs a note). A page's `answers`
+list, or a step's own, replaces that.
 
 ## 7. Rounds and history
 

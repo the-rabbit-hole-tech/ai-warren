@@ -46,7 +46,7 @@ template's `docs/page-types.md`.
 
 Full walk-through with a network migration: `_site/GUIDE.md`. Pick the `kind` by what the person has to do:
 
-- `review`: approve a design, plan or text. `checklist`: sign off delivered work on a `build`. `journey`: steps run in order, with checkpoints.
+- `review`: approve a design, plan or text. `checklist`: sign off delivered work on a `build`. `journey`: steps answered OK or CHANGE (stored as Yes and Changes), with checkpoints; `"gate": true` makes them run in order.
 - `backlog`: pick from a list. `questions`: open questions (`"skippable": true` adds a Skip button; a skipped question arrives as `"skipped": true` with an empty `answer`, so do not ask it again). `reference` and `status`: reading only.
 - `round`: a set of items to answer and send, with Accept risk. Without `phases` it's round single, sent from the bar. With `phases` it's round phases: phases `A`, `B`, steps `A1`, `A2`, and a Send per phase.
 - Item types mix on a page: `section`, `check`, `step`, `screen`, `contract`, `diff`, `question`, `choice`, `info`.

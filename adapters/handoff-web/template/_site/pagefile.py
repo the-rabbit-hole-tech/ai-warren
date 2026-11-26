@@ -21,9 +21,10 @@ from schema import DEFAULT_TYPE, SCHEMA, TYPE_ANSWERS, validate
 MAX_BYTES = 2 * 1024 * 1024
 SERVER_KEYS = ("rev", "rounds", "thread", "submissions", "route", "emails", "revisions")
 DEFINITION_KEYS = ("schema", "kind", "title", "summary", "build", "reset", "status", "options", "items", "phases", "drafts", "deck",
-                   "template", "droppable", "skippable")
+                   "template", "droppable", "skippable", "gate", "answers")
 DONE = ("yes", "risk")
 DEPENDENCY_MET = ("yes", "changes", "risk")
+JOURNEY_ANSWERS = ("yes", "changes")
 
 
 class PageError(Exception):
@@ -57,6 +58,19 @@ def item_type(doc, item):
     return item.get("type", DEFAULT_TYPE[doc["kind"]])
 
 
+def _default_answers(doc, typ):
+    """What an item of this type takes when it names no answers. A journey step takes OK and CHANGE (stored as yes and
+    changes), or the page's own answers list."""
+    if doc["kind"] == "journey" and typ == "step":
+        return doc.get("answers") or JOURNEY_ANSWERS
+    return TYPE_ANSWERS[typ]
+
+
+def _previous_step(doc, typ, prev_step):
+    """The step a step waits on: the one before it, only on a page with gate: true. Otherwise none, so steps are answered in any order."""
+    return [prev_step] if typ == "step" and prev_step and doc.get("gate") else []
+
+
 def allowed_answers(doc, item):
     """The answers an item takes: a tuple of values, None for free text, or () when it isn't answerable."""
     typ = item_type(doc, item)
@@ -66,7 +80,7 @@ def allowed_answers(doc, item):
         return ()
     if typ == "choice":
         return tuple(c["value"] for c in item.get("choices") or doc["options"]["choices"])
-    base = tuple(item.get("answers") or TYPE_ANSWERS[typ])
+    base = tuple(item.get("answers") or _default_answers(doc, typ))
     if item.get("skip") and "skipped" not in base:
         base += ("skipped",)
     if doc["kind"] == "round" and not item.get("answers"):
@@ -716,7 +730,7 @@ def _unblocked(doc, iid):
 
 def blocked_items(doc):
     """Items that can't be answered yet: a dependsOn item isn't answered Yes, Changes or Accept risk (a journey
-    step depends on the one before it unless it says otherwise), its phase waits on another, or its blockedBy
+    step depends on the one before it only on a page with gate: true), its phase waits on another, or its blockedBy
     hasn't had an unblock reply."""
     states, phases = item_states(doc), phase_states(doc)
     out, prev_step = set(fixing_of(doc)), None
@@ -726,7 +740,7 @@ def blocked_items(doc):
             continue
         deps = it.get("dependsOn")
         if deps is None:
-            deps = [prev_step] if typ == "step" and prev_step else []
+            deps = _previous_step(doc, typ, prev_step)
         if typ == "step":
             prev_step = it["id"]
         phase = phases.get(phase_of(it["id"])) if phases else None
@@ -739,8 +753,9 @@ def blocked_items(doc):
 def summary(doc):
     """The bar's counts for the open round: what's open, blocked, Yes and reopened, and a backlog's tally.
 
-    An item is blocked while a dependsOn item isn't answered Yes, Changes or Accept risk (a journey step depends on the one before it unless
-    it says otherwise) or while its blockedBy hasn't had an unblock reply. An item marked fix in progress is counted in "fixing" (only
+    An item is blocked while a dependsOn item isn't answered Yes, Changes or Accept risk (a journey step depends on the
+    one before it only on a page with gate: true) or while its blockedBy hasn't had an unblock reply. An item marked fix in progress is
+    counted in "fixing" (only
     present when something is marked) instead of open or blocked: it isn't awaiting the reviewer, and it keeps the page from approved.
     """
     states = item_states(doc)
@@ -766,7 +781,7 @@ def summary(doc):
             continue
         deps = it.get("dependsOn")
         if deps is None:
-            deps = [prev_step] if typ == "step" and prev_step else []
+            deps = _previous_step(doc, typ, prev_step)
         if typ == "step":
             prev_step = it["id"]
         if typ == "question":

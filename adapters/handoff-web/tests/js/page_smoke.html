@@ -1156,6 +1156,46 @@ async function yes(doc, id, note) {
     eq(card(w().document, "j1").dataset.answer, "yes");
   });
 
+  await t("journey: steps answer OK or CHANGE, in any order, and Copy results reads OK and CHANGE with the note", async () => {
+    const { win, doc } = await load("/demo/pf-journey3");
+    const vals = id => Array.from(card(doc, id).querySelectorAll(".seg button")).map(b => b.dataset.v + "=" + b.textContent.trim());
+    eq(vals("j1").join(), "yes=OK,chg=CHANGE"); eq(vals("j2").join(), "yes=OK,chg=CHANGE");
+    ok(!card(doc, "j2").querySelector(".st.blk"), "step 2 is not blocked by step 1");
+    click(seg(doc, "j2", "chg"));
+    const ta = card(doc, "j2").querySelector("textarea"); ok(ta, "CHANGE opens the note box"); typeIn(ta, "Wrong colour");
+    match(win.siteReview.results(), /- \[j2\] CHANGE: Order\n {4}Note: Wrong colour\n/);
+    match(win.siteReview.results(), /- \[j1\] NOT ANSWERED: Install\n/);
+    await saved();
+    const a = (await answers("demo/pf-journey3")).j2;
+    eq(a.answer, "changes"); eq(a.note, "Wrong colour");
+    click(seg(doc, "j1", "yes"));
+    match(card(doc, "j1").textContent, /Confirm OK for j1\?/);
+    click(card(doc, "j1").querySelector(".confirm-ok")); await saved();
+    match(win.siteReview.results(), /- \[j1\] OK \(locked\): Install\n/);
+    match(win.siteReview.results(), /Not approved yet: 1 of 2 are OK\./);
+  });
+
+  await t("journey: gate true holds step 2 until step 1 is answered", async () => {
+    const { doc } = await load("/demo/pf-journey4");
+    match(card(doc, "j2").querySelector(".st.blk").textContent, /Blocked by j1/);
+  });
+
+  await t("journey: at 390 px the two answers and the note box fit the screen", async () => {
+    const { doc } = await load("/demo/pf-journey5");
+    f.style.width = "390px"; await tick(150);
+    click(seg(doc, "j1", "chg"));
+    for (const id of ["j1", "j2"]) {
+      const c = card(doc, id), r = c.getBoundingClientRect();
+      ok(r.left >= 0 && r.right <= 390 + 1, id + ": card inside 390 px, " + r.left + " to " + r.right);
+      for (const b of c.querySelectorAll(".seg button")) {
+        const br = b.getBoundingClientRect();
+        ok(br.left >= 0 && br.right <= 391 && br.height >= 40, id + " " + b.dataset.v + ": button inside and tappable, " + br.left + " to " + br.right + ", " + br.height + " high");
+      }
+    }
+    const ta = card(doc, "j1").querySelector("textarea"); ok(ta.getBoundingClientRect().right <= 391, "the note box fits");
+    f.style.width = "1000px"; await tick(30);
+  });
+
   await t("restart: the restart shows its own delivery state", async () => {
     const { doc } = await load("/demo/pf-journey2");
     const box = doc.querySelector(".rvrestart");

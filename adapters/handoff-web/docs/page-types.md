@@ -47,7 +47,7 @@ page can mix them (see [Mixing item types](#mixing-item-types)).
 |---|---|---|---|
 | `review` | `section` | Yes / No / Changes | designs, plans, contracts, screens and re-reviews |
 | `checklist` | `check` | Yes / No / Changes / Skipped | sign-off of delivered work; needs a `build` |
-| `journey` | `step` | Yes / No / Changes / Skipped | ordered steps with checkpoints and Restart from |
+| `journey` | `step` | OK / CHANGE (Yes / Changes) | steps with checkpoints and Restart from; `gate` makes them run in order |
 | `backlog` | `choice` | the page's `options` | Start / Hold and the like; needs `options` |
 | `questions` | `question` | free text | a page of open questions |
 | `reference` | `info` | none | hand-off notes, email drafts, "what's built" |
@@ -103,7 +103,11 @@ are answered Yes, Changes or Accept risk, as soon as they're answered on the pag
 
 ### journey
 
-Steps run in order: each step depends on the one before it unless it sets its own `dependsOn` (`[]` for none).
+A step is answered OK or CHANGE: OK is stored as Yes, CHANGE as Changes, and CHANGE needs a note. There is no No. A step
+can still name its own `answers`, or the page can set `"answers": ["yes", "no", "changes", "skipped"]` (any of those four)
+for every step that names none. Steps can be answered in any order. Set `"gate": true` on the page to make each step wait
+for the one before it (a step can still set its own `dependsOn`, `[]` for none). Copy results lists each step as OK or
+CHANGE with its note.
 A Yes on a step with a `checkpoint` records that checkpoint. "Restart from a checkpoint" offers each checkpoint
 reached and asks before it acts: the steps up to it carry over as Yes, later steps start open, and the restart is
 sent to the page's route so the agent can reset the environment. The restart then shows whether the agent has
@@ -200,7 +204,7 @@ Like a reference page, but the agent rewrites it with `page.py set` as things mo
 |---|---|---|
 | `section` | Yes / No / Changes | `body` |
 | `check` | adds Skipped | `body`, `howto`, `dependsOn`, `blockedBy` |
-| `step` | adds Skipped | `steps`, `checkpoint`, `howto`, `dependsOn`, `blockedBy` |
+| `step` | OK / CHANGE on a journey, else adds Skipped | `steps`, `checkpoint`, `howto`, `dependsOn`, `blockedBy` |
 | `screen` | Yes / No / Changes | `images` (`[{src, alt, caption}]`), `fields` (`[{name, type, rule}]`), `body` |
 | `contract` | Yes / No / Changes | `fields`, `forms` (`[{name, fields}]`), `body` |
 | `diff` | Yes / No / Changes | `old`, `new`, `code`: drawn as a word diff with a Diff / Final switch |

@@ -249,7 +249,9 @@ def test_folder_index_merges_page_files_with_html_pages(pages):
     assert got["folder"] == "demo" and got["name"] == "Demo project"
     by = {c["href"]: c for c in got["pages"]}
     assert got["pages"][0]["href"] == "/demo/journeys/first-order"
-    assert by["/demo/journeys/first-order"]["note"] == "Round 1" and by["/demo/journeys/first-order"]["open"] == 1
+    assert by["/demo/journeys/first-order"]["note"] == "Round 1"
+    # No gate by default: both steps wait on the reviewer, not only the first.
+    assert by["/demo/journeys/first-order"]["open"] == 2
     design = by["/demo/design"]
     assert design["state"] == "needs-you" and design["open"] == 2 and "To review" in design["chips"]
     assert design["kind"] == "review" and design["title"] == "Settings design"

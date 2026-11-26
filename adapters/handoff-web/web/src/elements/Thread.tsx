@@ -5,6 +5,8 @@ import { inline } from "@/lib/text";
 import type { PageData, Reply } from "@/lib/types";
 
 const ANS_LABEL: Record<string, string> = { yes: "Yes", no: "No", changes: "Changes", skipped: "Skipped" };
+/** A journey reads OK and CHANGE where other pages read Yes and Changes. */
+const JOURNEY_LABEL: Record<string, string> = { yes: "OK", changes: "CHANGE" };
 const ANS_CLASS: Record<string, string> = { yes: "a-yes", no: "a-no", changes: "a-chg", skipped: "skp" };
 const ACTION_LABEL: Record<string, string> = { filed: "Filed", fixed: "Fixed", reopen: "Reopened", unblock: "Unblocked", wontfix: "Won't fix" };
 const SHOWN = 4;
@@ -21,7 +23,7 @@ export function itemEntries(data: PageData, id: string): Entry[] {
   const out: Entry[] = [];
   const answer = (a: { answer: string; note?: string; at?: string; blocker?: boolean }, round: number): Entry => ({
     kind: "answer", at: a.at ?? "", who: "You", round, action: a.blocker ? "blocker" : a.answer,
-    tag: a.blocker ? "Blocker" : ANS_LABEL[a.answer] ?? a.answer, tagClass: a.blocker ? "a-no" : ANS_CLASS[a.answer] ?? "a-other", html: inline(a.note).replace(/<[^>]+>/g, "") });
+    tag: a.blocker ? "Blocker" : (data.page.kind === "journey" ? JOURNEY_LABEL[a.answer] : undefined) ?? ANS_LABEL[a.answer] ?? a.answer, tagClass: a.blocker ? "a-no" : ANS_CLASS[a.answer] ?? "a-other", html: inline(a.note).replace(/<[^>]+>/g, "") });
   for (const r of data.page.rounds.slice(0, -1)) { const a = r.answers[id]; if (a && (a.answer || a.note)) out.push(answer(a, r.round)); }
   // A Yes that was reopened before it was answered again: kept as read-only history, not as the current answer or note.
   const open = data.page.rounds[data.page.rounds.length - 1], was = open.answers[id];

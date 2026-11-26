@@ -60,7 +60,7 @@ export function blockers(data: PageData, local?: Locals): Record<string, string>
   for (const it of data.page.items) {
     const t = typeOf(data.page, it);
     if (t === "info") continue;
-    const deps = it.dependsOn ?? (t === "step" && prev ? [prev] : []);
+    const deps = it.dependsOn ?? (t === "step" && prev && data.page.gate ? [prev] : []);
     if (t === "step") prev = it.id;
     if (data.states[it.id]?.fixing) { out[it.id] = "fix in progress"; continue; }
     if (data.states[it.id]?.dropping) { out[it.id] = "drop requested"; continue; }
