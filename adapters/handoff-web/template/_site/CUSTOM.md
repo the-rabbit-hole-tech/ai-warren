@@ -35,7 +35,7 @@ Each item has a More button that pops up its actions, such as Generate an email.
 ```js
 window.HandoffSite.itemActions.push(it => ({
   name: "copy-title", label: "Copy this step's title",
-  onSelect: () => navigator.clipboard.writeText(it.title),
+  onSelect: () => window.HandoffSite.copyOrPrompt(it.title),
 }));
 ```
 
@@ -61,7 +61,7 @@ window.HandoffSite.tours["progress-round"] = [
 
 ## Elements
 
-`window.HandoffSite` holds `html` (htm bound to React) and these elements. Their inputs are in `web/src/elements/` in the repo.
+`window.HandoffSite` holds `html` (htm bound to React), `copyOrPrompt(text)` (copies on any address, including a plain http one where `navigator.clipboard` is missing; use it instead of `navigator.clipboard.writeText`) and these elements. Their inputs are in `web/src/elements/` in the repo.
 
 | Element | What it is |
 |---|---|

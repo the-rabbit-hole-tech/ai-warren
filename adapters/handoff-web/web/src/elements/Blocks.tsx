@@ -1,3 +1,4 @@
+import { copyButton } from "@/lib/copy";
 import { inline } from "@/lib/text";
 import type { Block, Field, ItemDef } from "@/lib/types";
 
@@ -5,10 +6,7 @@ const Inline = ({ text }: { text: unknown }) => <span dangerouslySetInnerHTML={{
 
 function CopyBlock({ text }: { text: string }) {
   return <div className="copyblk"><pre>{text}</pre>
-    <button type="button" className="copy-cmd" onClick={async e => {
-      const b = e.currentTarget;
-      await navigator.clipboard.writeText(text); b.textContent = "Copied"; setTimeout(() => { b.textContent = "Copy"; }, 1500);
-    }}>Copy</button></div>;
+    <button type="button" className="copy-cmd" onClick={e => copyButton(e.currentTarget, text, e.currentTarget.previousElementSibling, "Copy")}>Copy</button></div>;
 }
 
 export function Picture({ src, alt, caption }: { src: string; alt?: string; caption?: string }) {

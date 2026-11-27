@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { flushSync } from "react-dom";
+import { copyButton } from "@/lib/copy";
 import { stamp } from "@/lib/model";
 import type { EmailVersion } from "@/lib/types";
 
@@ -21,7 +22,7 @@ export interface EmailDraftProps {
 function Part({ label, text }: { label: string; text: string }) {
   return <div className="email-part">
     <div className="email-part-top"><span className="email-label">{label}</span>
-      <button type="button" className="copy-cmd" aria-label={"Copy " + label} onClick={async e => { const b = e.currentTarget; await navigator.clipboard.writeText(text); b.textContent = "Copied"; setTimeout(() => { b.textContent = "Copy"; }, 1500); }}>Copy</button></div>
+      <button type="button" className="copy-cmd" aria-label={"Copy " + label} onClick={e => copyButton(e.currentTarget, text, e.currentTarget.parentElement?.nextElementSibling, "Copy")}>Copy</button></div>
     <pre>{text}</pre></div>;
 }
 

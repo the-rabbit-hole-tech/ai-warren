@@ -18,6 +18,7 @@ import { wireDiffs } from "@/lib/diffs";
 import { actToast, returnSoon } from "@/lib/finish";
 import { folder, folderPages, folderUrl } from "@/lib/howto";
 import { DONE, blockers, count, deliveryOf, heldBy, heldIds, openRound, typeOf, type CountItem } from "@/lib/model";
+import { copyOrPrompt } from "@/lib/copy";
 import { itemActions, pageActions, templates } from "@/lib/custom";
 import { momentsFor, play } from "@/lib/moments";
 import { inline } from "@/lib/text";
@@ -133,7 +134,7 @@ export function Page() {
   const approved = c.approved && !fixingN;
   const sends = data.route.mode !== "copy", to = data.route.to;
   const reference = p.kind === "reference" || p.kind === "status";
-  const copy = async () => { await navigator.clipboard.writeText(results()); };
+  const copy = () => copyOrPrompt(results());
   const sendAll = async () => {
     const left = c.total - c.answered;
     if (!c.allDone && !confirm(`Send now? ${left} item${left === 1 ? " is" : "s are"} still open.`)) return;
@@ -153,7 +154,7 @@ export function Page() {
     try {
       const sent = await postPage("/send", { kind: "send", scope: "item", items: [it.id], results: out }) as { to: string; listening: boolean };
       await redraw();
-      if (!sent.listening) { await navigator.clipboard.writeText(out); alert(`${it.id} is sent to ${sent.to}, who isn't listening right now, so it's copied too. Paste it to them.`); }
+      if (!sent.listening) { await copyOrPrompt(out); alert(`${it.id} is sent to ${sent.to}, who isn't listening right now, so it's copied too. Paste it to them.`); }
     } catch (e) { alert(`Couldn't send ${it.id}: ${(e as Error).message}.`); }
   };
   /** A choice item's pick goes only when its own Send this item is pressed. */
@@ -166,7 +167,7 @@ export function Page() {
     try {
       const sent = await postPage("/send", { kind: "send", scope: "item", items: [it.id], results: out }) as { to: string; listening: boolean };
       await redraw();
-      if (!sent.listening) { await navigator.clipboard.writeText(out); alert(`${it.id} is sent to ${sent.to}, who isn't listening right now, so it's copied too. Paste it to them.`); }
+      if (!sent.listening) { await copyOrPrompt(out); alert(`${it.id} is sent to ${sent.to}, who isn't listening right now, so it's copied too. Paste it to them.`); }
     } catch (e) { alert(`Couldn't send ${it.id}: ${(e as Error).message}.`); }
   };
   const dropItem = async (it: ItemDef) => {
@@ -195,7 +196,7 @@ export function Page() {
     if (!(await flush())) { alert("Can't send yet: the answers aren't saved. Try again once it says Saved."); return; }
     if (!sends) {
       const final = p.items.filter(it => DONE.includes(local[it.id]?.v ?? ""));
-      await navigator.clipboard.writeText(`Build a deck: ${framing}\n${final.map(it => `- [${it.id}] ${it.title}${local[it.id]?.n ? ` (${local[it.id]?.n})` : ""}`).join("\n")}\n`);
+      await copyOrPrompt(`Build a deck: ${framing}\n${final.map(it => `- [${it.id}] ${it.title}${local[it.id]?.n ? ` (${local[it.id]?.n})` : ""}`).join("\n")}\n`);
       alert("Copied what the deck needs. Paste it to " + to + ".");
       return;
     }
@@ -206,15 +207,15 @@ export function Page() {
     const cur = local[it.id] ?? {};
     set(it.id, { ...cur, n: note, blocker: true });
     const out = `BLOCKER: ${p.title} (/${rel}${p.build ? ", build " + p.build : ""})\n- [${it.id}] ${it.title}\n    Note: ${note.replace(/\n/g, " ")}\n`;
-    if (!sends) { await navigator.clipboard.writeText(out); alert(`Blocker copied. Paste it to ${to} now.`); return; }
+    if (!sends) { await copyOrPrompt(out); alert(`Blocker copied. Paste it to ${to} now.`); return; }
     try {
       if (!(await flush())) throw new Error("the answers aren't saved yet");
       const sent = await postPage("/send", { kind: "blocker", items: [it.id], results: out }) as { to: string; listening: boolean };
       await redraw();
       alert(`Blocker sent to ${sent.to}.` + (sent.listening ? "" : ` ${sent.to} isn't listening right now, so paste it to them as well.`));
-      if (!sent.listening) await navigator.clipboard.writeText(out);
+      if (!sent.listening) await copyOrPrompt(out);
     } catch (e) {
-      await navigator.clipboard.writeText(out);
+      await copyOrPrompt(out);
       alert(`Couldn't send the blocker (${(e as Error).message}), so it's copied. Paste it to ${to} now.`);
     }
   };
@@ -237,7 +238,7 @@ export function Page() {
     if (!list.length) { alert("No item on this page is marked as a blocker."); return; }
     let out = `BLOCKER: ${p.title} (/${rel}${p.build ? ", build " + p.build : ""})\n`;
     for (const it of list) out += `- [${it.id}] ${it.title}\n    Note: ${(local[it.id]?.n ?? "").replace(/\n/g, " ")}\n`;
-    await navigator.clipboard.writeText(out);
+    await copyOrPrompt(out);
     alert(`${list.length}${list.length === 1 ? " blocker" : " blockers"} copied. Paste ${list.length === 1 ? "it" : "them"} to ${to} now.`);
   };
   const roundClose = async () => {
@@ -340,8 +341,8 @@ export function Page() {
 
   async function doCopy() {
     setPopup("");
-    await copy();
-    alert("Copied. Paste it into the " + (rel.split("/")[0] ?? "the").toUpperCase() + " session.");
+    const ok = await copy();
+    if (ok) alert("Copied. Paste it into the " + (rel.split("/")[0] ?? "the").toUpperCase() + " session.");
     if (c?.allDone) returnSoon(flush);
   }
 }

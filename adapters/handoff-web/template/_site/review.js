@@ -99,14 +99,36 @@ window.rvCount = function (items, state, o) {
     return { id: "s" + (i + 1), title: textOf(n), at: n };
   }
   function textOf(el) { const c = el.cloneNode(true); c.querySelectorAll(".chip, details.howto, template").forEach(x => x.remove()); return c.textContent.trim().replace(/\s+/g, " "); }
+  // Copy on any address: the clipboard API only exists on https, localhost and 127.0.0.1, so on a plain http
+  // address (the Burrow over the LAN, a phone) fall back to a hidden text box and the older copy command; when
+  // that fails too, select the source text (if any) and let the button say HOLD_TEXT.
+  const HOLD_TEXT = "Press and hold to copy";
+  async function copyAny(text, src) {
+    try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return "copied"; } } catch (e) { /* older route */ }
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.readOnly = true; ta.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+    document.body.appendChild(ta); ta.select();
+    try { ta.setSelectionRange(0, text.length); } catch (e) { /* some engines refuse */ }
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    ta.remove();
+    if (ok) return "copied";
+    if (src) { const rg = document.createRange(); rg.selectNodeContents(src); const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(rg); return "selected"; }
+    return "failed";
+  }
+  // Copy a button's text and flash the result on it, then put its idle label back.
+  async function copyFlash(b, text, src, idle) {
+    const done = await copyAny(text, src);
+    b.textContent = done === "copied" ? "Copied" : done === "selected" ? HOLD_TEXT : idle;
+    clearTimeout(b._copyT);
+    b._copyT = setTimeout(() => { b.textContent = idle; }, done === "selected" ? 5000 : 1500);
+    return done;
+  }
+  window.warrenCopy = { copyAny, copyFlash, HOLD_TEXT };
   function copyButtons(root) {
     root.querySelectorAll("pre, code.cmd").forEach(blk => {
       const b = document.createElement("button"); b.type = "button"; b.className = "copy-cmd"; b.textContent = "Copy";
-      b.addEventListener("click", async () => {
-        const t = blk.textContent.trim();
-        try { await navigator.clipboard.writeText(t); } catch (e) { const x = document.createElement("textarea"); x.value = t; document.body.appendChild(x); x.select(); document.execCommand("copy"); x.remove(); }
-        b.textContent = "Copied"; setTimeout(() => { b.textContent = "Copy"; }, 1500);
-      });
+      b.addEventListener("click", () => copyFlash(b, blk.textContent.trim(), blk, "Copy"));
       blk.insertAdjacentElement("afterend", b);
     });
   }
@@ -656,7 +678,7 @@ if (!window.siteTheme) { const t = document.createElement("script"); t.src = "/_
     el.append(dot, t);
     if (dl.state === "deaf") {
       const b = document.createElement("button"); b.type = "button"; b.className = "dlv-copy"; b.textContent = "Copy results instead";
-      b.addEventListener("click", async () => { await copyText(results()); b.textContent = "Copied"; });
+      b.addEventListener("click", async () => { if (await copyText(results())) b.textContent = "Copied"; });
       el.appendChild(b);
     }
     fit();
@@ -1008,13 +1030,16 @@ if (!window.siteTheme) { const t = document.createElement("script"); t.src = "/_
     }
     return out;
   }
+  const { copyAny, copyFlash, HOLD_TEXT } = window.warrenCopy;
+  // Copy text that has no element to select: when nothing can copy it, a prompt shows it selected. True when copied.
   async function copyText(out) {
-    try { await navigator.clipboard.writeText(out); } catch (e) { const t = document.createElement("textarea"); t.value = out; body.appendChild(t); t.select(); document.execCommand("copy"); t.remove(); }
+    if ((await copyAny(out)) === "copied") return true;
+    window.prompt(HOLD_TEXT, out);
+    return false;
   }
   bar.querySelectorAll(".copy").forEach(b => b.addEventListener("click", async () => {
     showMenu(false);
-    await copyText(results());
-    alert("Copied. Paste it into the " + session + " session.");
+    if (await copyText(results())) alert("Copied. Paste it into the " + session + " session.");
     if (lastDone) returnSoon();
   }));
   // Copy blockers only: every item marked as a blocker, in the "Blocker: copy now" format.
@@ -1025,8 +1050,7 @@ if (!window.siteTheme) { const t = document.createElement("script"); t.src = "/_
     const build = body.getAttribute("data-build");
     let out = "BLOCKER: " + document.title + " (" + page + (build ? ", build " + build : "") + ")\n";
     for (const it of list) out += "- [" + it.id + "] " + it.title + "\n    Note: " + ((state[it.id] || {}).n || "").replace(/\n/g, " ") + "\n";
-    await copyText(out);
-    alert(list.length + (list.length === 1 ? " blocker" : " blockers") + " copied. Paste " + (list.length === 1 ? "it" : "them") + " to " + BLOCKER_TO + " now.");
+    if (await copyText(out)) alert(list.length + (list.length === 1 ? " blocker" : " blockers") + " copied. Paste " + (list.length === 1 ? "it" : "them") + " to " + BLOCKER_TO + " now.");
   });
   // Unified pages: a Copy button next to each group's "N open" chip copies just that group. It sits
   // inside <summary>, so the click must stop there or it would toggle the group.
@@ -1037,8 +1061,7 @@ if (!window.siteTheme) { const t = document.createElement("script"); t.src = "/_
     b.title = "Copy this page's results only";
     b.addEventListener("click", async e => {
       e.preventDefault(); e.stopPropagation();
-      await copyText(results(g));
-      b.textContent = "Copied"; setTimeout(() => { b.textContent = "Copy"; }, 1500);
+      if (await copyText(results(g))) { b.textContent = "Copied"; setTimeout(() => { b.textContent = "Copy"; }, 1500); }
     });
     if (chip) chip.after(b); else gm.prepend(b);
   }
@@ -1094,10 +1117,7 @@ if (!window.siteTheme) { const t = document.createElement("script"); t.src = "/_
         }
         pre.textContent = text;
         cp.disabled = false;
-        cp.addEventListener("click", async () => {
-          try { await navigator.clipboard.writeText(text); } catch (e) { const ta = document.createElement("textarea"); ta.value = text; body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); }
-          cp.textContent = "Copied"; setTimeout(() => { cp.textContent = "Copy results"; }, 1500);
-        });
+        cp.addEventListener("click", () => copyFlash(cp, text, pre, "Copy results"));
       });
       outer.appendChild(d);
     }

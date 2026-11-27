@@ -19,13 +19,13 @@ import { Round } from "@/elements/Round";
 import { Thread } from "@/elements/Thread";
 import { TourButton } from "@/elements/TourButton";
 import { itemActions, loadCustom, pageActions, templates } from "@/lib/custom";
-import { copyInline } from "@/lib/copy";
+import { copyInline, copyOrPrompt } from "@/lib/copy";
 import { momentsFor } from "@/lib/moments";
 import { tours } from "@/lib/tour";
 
 /** htm bound to React: custom templates use this with no compile step. */
 export const html = htm.bind(createElement);
-export { itemActions, momentsFor, pageActions, templates, tours };
+export { copyOrPrompt, itemActions, momentsFor, pageActions, templates, tours };
 export { Answer, Blocks, Button, Chip, Choices, EmailDraft, Footer, History, Item, ItemMore, JumpBar, OpenIds, Page, Phase, Restart, Round, Thread, TourButton };
 
 document.addEventListener("click", copyInline);
