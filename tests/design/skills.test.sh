@@ -4,7 +4,7 @@
 source "$(dirname "$0")/../assert.sh"
 P="$ROOT/plugins/design"
 [ "$(jq -r .name "$P/.claude-plugin/plugin.json")" = design ] && ok "plugin is named design" || bad "plugin is named design"
-[ "$(jq -r .version "$P/.claude-plugin/plugin.json")" = 1.0.0 ] && ok "plugin version is 1.0.0" || bad "plugin version is 1.0.0"
+[ "$(jq -r .version "$P/.claude-plugin/plugin.json")" = 1.1.0 ] && ok "plugin version is 1.1.0" || bad "plugin version is 1.1.0"
 for s in brainstorm plans section-review design-session new-ui board-to-build; do
   f="$P/skills/$s/SKILL.md"
   if [ -f "$f" ] && [ "$(sed -n 2p "$f")" = "name: $s" ] && grep -q '^description: Use when' "$f"; then
