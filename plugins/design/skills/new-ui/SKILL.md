@@ -9,3 +9,4 @@ description: Use when an issue designs or builds new UI (component, page, layout
 - Bugs in existing UI and the integration of a settled design stay wave work.
 - A component, helper or template piece used in two or more places is built once and reused, never copied (see scaffold:reuse).
 - For a visual design session, see `design:design-session`.
+- Before building UI that has a board in the project's design Artifact, follow it faithfully (see `design:board-to-build`).
